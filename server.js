@@ -193,9 +193,10 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             {"semanticScore": 85, "reasoningPassed": true, "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."}
         `;
 
-        // FIX: Using native fetch directly to Google's stable v1 production engine endpoint
         const apiKey = process.env.GEMINI_API_KEY || '';
-        const targetUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        
+        // FIX: Switched to v1beta path which supports the precise 'gemini-1.5-flash' alias directly
+        const targetUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
         const apiResponse = await fetch(targetUrl, {
             method: 'POST',
