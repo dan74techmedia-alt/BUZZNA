@@ -196,8 +196,9 @@ app.post('/api/submissions/evaluate', async (req, res) => {
         const apiKey = process.env.GEMINI_API_KEY || '';
         
         // FIX: Targeted stable release route mapping string
-        const targetUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
-
+     // FIX: The exact matching version path for Google AI Studio Free Tier Project API Keys
+        const targetUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        
         const apiResponse = await fetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
