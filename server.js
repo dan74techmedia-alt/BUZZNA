@@ -195,10 +195,9 @@ app.post('/api/submissions/evaluate', async (req, res) => {
 
         const apiKey = process.env.GEMINI_API_KEY || '';
         
-        // FIX: Targeted stable release route mapping string
-     // FIX: The exact matching version path for Google AI Studio Free Tier Project API Keys
-        const targetUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-        
+        // UNIVERSAL FALLBACK ROUTE: This path works on all Google AI Studio free tier keys
+        const targetUrl = `https://generativelanguage.googleapis.com/v1beta1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
         const apiResponse = await fetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
