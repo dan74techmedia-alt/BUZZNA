@@ -6,7 +6,8 @@
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
-const { GoogleGenAI } = require('@google/generative-ai');
+// FIX: Import the standard GoogleGenerativeAI helper class directly
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(express.json());
@@ -21,8 +22,8 @@ const pool = new Pool({
 });
 
 // 2. GOOGLE GEMINI 1.5 FLASH AI ROUTER INITIALIZATION
-// Expects GEMINI_API_KEY inside your local environment system configurations
-const aiEngine = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// FIX: Use GoogleGenerativeAI initialization sequence
+const aiEngine = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = aiEngine.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 
@@ -207,6 +208,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             }
         `;
 
+        // FIX: Call generateContent directly on the model wrapper instance
         const aiResponseNode = await model.generateContent(coreSystemInstruction);
         const cleanTextPayload = aiResponseNode.response.text().trim();
         
@@ -214,7 +216,6 @@ app.post('/api/submissions/evaluate', async (req, res) => {
         const gradingMatrix = JSON.parse(cleanTextPayload);
 
         // Compute final score metric outcome
-        // Total threshold pass logic state requires clean semantic logic and less than 4 total tab switch infractions
         const logicEvaluationPassed = gradingMatrix.reasoningPassed && switchCount <= 3;
         let finalFeedbackMessage = "";
 
