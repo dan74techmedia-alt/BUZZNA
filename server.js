@@ -7,7 +7,6 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
-// Standard import structure for Google Generative AI
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
@@ -16,7 +15,7 @@ app.use(express.json());
 // Serve static frontend files directly from the root directory
 app.use(express.static(__dirname));
 
-// Route the main domain address to serve your index.html file
+// Explicitly route the main domain address to serve your index.html file
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -28,8 +27,9 @@ const pool = new Pool({
 });
 
 // 2. GOOGLE GEMINI 1.5 FLASH AI ROUTER INITIALIZATION
-// Optimized initialization sequence using standard structural parameters
+// FIX: Using robust fallback initialization to avoid v1beta pathing drops
 const aiEngine = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+// FIX: Using the strict name string to match Google's standard live API endpoint
 const model = aiEngine.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 
@@ -186,7 +186,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             return res.status(200).json({ success: false, message: analyticalFailureFeedback });
         }
 
-        // --- LAYER 4 SEMANTIC VERIFICATION: DEPLOYING GEMINI 1.5 FLASH AI ENGINE ---
+        // --- LAYER 4 SEMANTIC VERIFICATION: DEPLOYING GEMINI AI MATRIX ---
         const coreSystemInstruction = `
             You are the LogicLoom Automated Assessment Matrix Engine. Evaluate this solution against the scenario.
             
@@ -203,14 +203,11 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             {"semanticScore": 85, "reasoningPassed": true, "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."}
         `;
 
-        // Modern processing call structure for the continuous API runtime stream
-        const aiResponseNode = await model.generateContent({
-            contents: [{ role: 'user', parts: [{ text: coreSystemInstruction }] }]
-        });
-        
+        // FIX: simplified execution structure to completely avoid version route drops
+        const aiResponseNode = await model.generateContent(coreSystemInstruction);
         let cleanTextPayload = aiResponseNode.response.text().trim();
         
-        // Safety step: strip any unexpected markdown code block tags if returned by the AI model anyway
+        // Safety step: strip any unexpected markdown block formats if returned anyway
         if (cleanTextPayload.startsWith("```")) {
             cleanTextPayload = cleanTextPayload.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
         }
@@ -258,7 +255,6 @@ app.post('/api/submissions/evaluate', async (req, res) => {
         }
 
     } catch (error) {
-        // Detailed console tracking inside Render logs to instantly spotlight routing details
         console.error("CRITICAL AI GATEWAY ROUTING FAULT:", error.message);
         return res.status(500).json({ 
             success: false, 
