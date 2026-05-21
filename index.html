@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LogicLoom | Secure Workspace</title>
     
-    <!-- Tailwind CSS Engine for modern styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <style>
@@ -35,20 +34,17 @@
 </head>
 <body class="text-slate-100 font-sans p-4 flex flex-col items-center">
 
-    <!-- PLATFORM HEADER -->
     <header class="w-full max-w-2xl py-6 flex justify-between items-center border-b border-purple-500/20">
         <h1 class="text-2xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">
-            LOGICLOOM 
+            LOGICLOOM
         </h1>
         
-        <!-- Live Wallet Counter (Hidden on Screen 1, Unlocks on Screen 2) -->
         <div id="headerPot" class="screen-hidden text-sm bg-yellow-500/10 px-4 py-2 rounded-full border border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.1)]">
             <span class="text-yellow-400 font-bold yellow-glow uppercase text-[10px] mr-1">Pot</span>
             <span id="potBalance" class="text-yellow-400 font-mono font-bold">KES 0.00</span>
         </div>
     </header>
 
-    <!-- ==================== SCREEN 1: ENTRANCE PORTAL ==================== -->
     <main id="entranceScreen" class="w-full max-w-md mt-10">
         <div class="text-center mb-8">
             <h2 class="text-3xl font-extrabold tracking-tight mb-2">Sharpen Your Logic.</h2>
@@ -56,7 +52,6 @@
         </div>
 
         <div class="glass-panel p-6 rounded-3xl shadow-2xl">
-            <!-- Sign-Up Inputs -->
             <div class="space-y-4 mb-8">
                 <div>
                     <label class="text-[10px] uppercase font-black text-blue-400 tracking-widest ml-1">Full Name</label>
@@ -72,7 +67,6 @@
                 </div>
             </div>
 
-            <!-- Pass Selection Tiers -->
             <div>
                 <h3 class="text-xs font-black text-yellow-500 uppercase tracking-widest mb-4 yellow-glow">Select Challenge Pass</h3>
                 <div class="grid grid-cols-1 gap-3">
@@ -102,41 +96,36 @@
                 </div>
             </div>
 
-            <button onclick="simulateUnlockFlow()" class="w-full mt-8 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-black py-4 rounded-2xl shadow-xl transition-transform uppercase tracking-widest text-xs">
+            <button onclick="handleRegistrationSubmit()" id="unlockBtn" class="w-full mt-8 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-black py-4 rounded-2xl shadow-xl transition-all uppercase tracking-widest text-xs">
                 Unlock Challenge Pass
             </button>
         </div>
     </main>
 
 
-    <!-- ==================== SCREEN 2: ACTIVE WORKSPACE ==================== -->
     <main id="workspaceScreen" class="screen-hidden w-full max-w-2xl mt-8">
         <div class="glass-panel p-6 rounded-3xl shadow-2xl">
             
-            <!-- Workspace Metric Header -->
             <div class="flex justify-between items-center mb-5">
                 <div class="flex items-center gap-2">
                     <div class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                     <h2 class="text-sm font-bold text-blue-300 uppercase tracking-widest">Active Scenario</h2>
                 </div>
-                <!-- Smart Scan Switch Counter Display -->
                 <span id="switchCounter" class="text-[10px] font-black bg-purple-950/80 px-3 py-1.5 rounded-lg text-purple-300 border border-purple-500/30">
                     SWITCHES: 0
                 </span>
             </div>
             
-            <!-- Dynamic Problem Scenario Box -->
             <div class="bg-slate-950/40 border border-purple-900/30 p-5 rounded-2xl mb-6">
                 <p id="scenarioText" class="text-slate-300 text-base leading-relaxed font-medium italic">
-                    "A community relies on one old water well. A factory owner wants to buy the land to create 500 jobs, but the factory might risk polluting the underlying water basin. As an urban economic analyst, design a logical framework balancing community necessity and industrial job expansion."
+                    Loading scenario data...
                 </p>
                 <div class="mt-4 flex items-center gap-2 text-xs text-blue-400 font-bold tracking-wide">
                     <span>💡 Hint:</span>
-                    <span class="text-slate-400 font-normal">Prioritize long-term sustainability frameworks versus immediate short-term capital deployment.</span>
+                    <span id="hintText" class="text-slate-400 font-normal">Loading strategic guidelines...</span>
                 </div>
             </div>
 
-            <!-- The Protected Input Workspace -->
             <div class="relative group">
                 <div class="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-purple-600 rounded-2xl blur opacity-10 group-focus-within:opacity-20 transition duration-300"></div>
                 <textarea 
@@ -147,7 +136,6 @@
                     spellcheck="false"
                 ></textarea>
                 
-                <!-- Smart Scan Tab-Switch Alert UI Overlap -->
                 <div id="statusAlert" class="screen-hidden absolute inset-0 flex items-center justify-center bg-slate-950/95 rounded-2xl z-10 p-6 text-center border border-yellow-500/30">
                     <div>
                         <p class="text-yellow-500 font-black text-xl yellow-glow mb-2">⚠️ SMART SCAN INTEGRITY BREACH</p>
@@ -159,21 +147,24 @@
                 </div>
             </div>
 
-            <!-- Submission Execution button -->
-            <button onclick="processLogicAnalysis()" class="w-full mt-6 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-black py-4 rounded-2xl transition-all shadow-lg shadow-blue-900/20 uppercase tracking-widest text-xs">
+            <button onclick="submitLogicAnalysis()" id="analyzeBtn" class="w-full mt-6 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white font-black py-4 rounded-2xl transition-all shadow-lg shadow-blue-900/20 uppercase tracking-widest text-xs">
                 Analyze Logic (+KES 22.00 Reward Match)
             </button>
         </div>
     </main>
 
 
-    <!-- ==================== CORE SCRIPT ENGINE ==================== -->
     <script>
         // System Tracking Variables
         let selectedTier = null;
         let selectedCost = 0;
         let switchCount = 0;
-        let trackingActive = false; // Ensures tab tracking only fires when active on screen 2
+        let trackingActive = false; 
+        let currentUserId = null;
+        let currentChallengeId = null;
+        
+        // Timer tracking variables for typing speed checks
+        let startTime = null;
 
         // SCREEN 1: Tier Selection Controller
         function selectTier(tier, cost) {
@@ -188,13 +179,14 @@
             activeBtn.className = activeBtn.className.replace('border-purple-900/40', 'border-blue-500');
         }
 
-        // NAVIGATION SWITCHER: Simulates verification, webhook confirmation and unlocks workspace
-        function simulateUnlockFlow() {
-            const name = document.getElementById('regName').value.trim();
-            const phone = document.getElementById('regPhone').value.trim();
-            const email = document.getElementById('regEmail').value.trim();
+        // CONNECTED NETWORKING LAYER: Handshakes registration directly with backend route
+        async function handleRegistrationSubmit() {
+            const fullName = document.getElementById('regName').value.trim();
+            const mpesaNumber = document.getElementById('regPhone').value.trim();
+            const emailAddress = document.getElementById('regEmail').value.trim();
+            const unlockBtn = document.getElementById('unlockBtn');
 
-            if (!name || !phone || !email) {
+            if (!fullName || !mpesaNumber || !emailAddress) {
                 alert("❌ Input Error: All registration fields must be completely filled out.");
                 return;
             }
@@ -203,15 +195,114 @@
                 return;
             }
 
-            alert(`⚡ [Webhook Emulation]\nSTK Push triggered to ${phone} for KSH ${selectedCost}.\nPayment successful! Unlocking logic workspace.`);
+            try {
+                unlockBtn.innerText = "PROCESSING PAYMENT STK...";
+                unlockBtn.disabled = true;
 
-            // Switch Screen displays by modifying classes
-            document.getElementById('entranceScreen').classList.add('screen-hidden');
-            document.getElementById('workspaceScreen').classList.remove('screen-hidden');
-            document.getElementById('headerPot').classList.remove('screen-hidden');
-            
-            // Turn on anti-cheat focus tracking
-            trackingActive = true;
+                const response = await fetch('/api/users/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fullName, mpesaNumber, emailAddress, selectedTier, costAmount: selectedCost })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentUserId = data.user.userId;
+                    document.getElementById('potBalance').innerText = `KES ${parseFloat(data.user.balance).toFixed(2)}`;
+                    
+                    // Proceed to download today's question from database
+                    await fetchDailyChallenge();
+                } else {
+                    alert(`❌ Setup Failed: ${data.error}`);
+                    unlockBtn.innerText = "Unlock Challenge Pass";
+                    unlockBtn.disabled = false;
+                }
+
+            } catch (err) {
+                console.error(err);
+                alert("❌ System connection fault connecting to payment gateway.");
+                unlockBtn.innerText = "Unlock Challenge Pass";
+                unlockBtn.disabled = false;
+            }
+        }
+
+        // CONNECTED NETWORKING LAYER: Fetches the latest live challenge data row
+        async function fetchDailyChallenge() {
+            try {
+                const response = await fetch('/api/challenges/today');
+                const challenge = await response.json();
+
+                currentChallengeId = challenge.challenge_id;
+                document.getElementById('scenarioText').innerText = `"${challenge.scenario_text}"`;
+                document.getElementById('hintText').innerText = challenge.pro_tip_hint || "Analyze structural concepts closely.";
+                document.getElementById('answerInput').placeholder = `Type your response here... (Minimum ${challenge.minimum_word_count} words required)`;
+
+                // Switch Screen View Displays
+                document.getElementById('entranceScreen').classList.add('screen-hidden');
+                document.getElementById('workspaceScreen').classList.remove('screen-hidden');
+                document.getElementById('headerPot').classList.remove('screen-hidden');
+                
+                // Fire timer and tracking systems
+                trackingActive = true;
+                startTime = new Date();
+
+            } catch (err) {
+                console.error(err);
+                alert("Failed to load active daily challenge layout parameters.");
+            }
+        }
+
+        // CONNECTED NETWORKING LAYER: Submits metrics and text data for multi-layer evaluation
+        async function submitLogicAnalysis() {
+            const userResponse = document.getElementById('answerInput').value.trim();
+            const analyzeBtn = document.getElementById('analyzeBtn');
+
+            if (!userResponse) {
+                alert("⚠️ Please type your solution response frame before executing analysis.");
+                return;
+            }
+
+            const endTime = new Date();
+            const timeSpentSeconds = Math.max(1, Math.round((endTime - startTime) / 1000));
+
+            try {
+                analyzeBtn.innerText = "RUNNING HIGH-INTEGRITY AI GRADING SCAN...";
+                analyzeBtn.disabled = true;
+
+                const response = await fetch('/api/submissions/evaluate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUserId,
+                        challengeId: currentChallengeId,
+                        userResponse,
+                        switchCount,
+                        timeSpentSeconds
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(`🎉 SUCCESS:\n${data.message}\n\nAI Insights:\n${data.insights}`);
+                    document.getElementById('potBalance').innerText = `KES ${parseFloat(data.newBalance).toFixed(2)}`;
+                    document.getElementById('answerInput').value = "";
+                    switchCount = 0;
+                    document.getElementById('switchCounter').innerText = "SWITCHES: 0";
+                    // Reset timer for secondary operations if any
+                    startTime = new Date();
+                } else {
+                    alert(`❌ EVALUATION FAIL:\n${data.message}`);
+                }
+
+            } catch (err) {
+                console.error(err);
+                alert("Network communication timeout handling evaluation processing nodes.");
+            } finally {
+                analyzeBtn.innerText = "Analyze Logic (+KES 22.00 Reward Match)";
+                analyzeBtn.disabled = false;
+            }
         }
 
 
@@ -249,122 +340,6 @@
         function resumeTask() {
             statusAlert.classList.add('screen-hidden');
         }
-
-        // Form submission framework validation checklist placeholder
-        function processLogicAnalysis() {
-            const analyticalText = answerInput.value.trim();
-            if (analyticalText.length < 40) {
-                alert("⚠️ Validation Failure: Logic text layout is too brief. Provide structural analytical proof.");
-                return;
-            }
-            alert(`✅ Submission Locked!\nMetrics captured:\n- Word Length: ${analyticalText.split(' ').length} words\n- Integrity Breaches: ${switchCount}\n\nReady for next step: AI Processing Array initialization.`);
-        }
     </script>
-    <script>
-
-// ====================================================================
-// LOGICLOOM AI EVALUATION ENGINE Blueprint
-// DEPENDENCIES: @google/generative-ai
-// ====================================================================
-
-async function evaluateUserResponse(dbUser, dbChallenge, clientSubmission) {
-    const { user_response, switch_count, time_spent_seconds } = clientSubmission;
-    const { mandatory_keywords, minimum_word_count, scenario_text } = dbChallenge;
-
-    // 1. HARD BLOCK INTEGRITY LAYER (The Bot Check)
-    const words = user_response.trim().split(/\s+/);
-    const actualWordCount = words.length;
-
-    if (actualWordCount < minimum_word_count) {
-        return {
-            is_passed: false,
-            feedback: `Logic layout is incomplete. Your response contained ${actualWordCount} words, missing the mandatory framework minimum of ${minimum_word_count} words.`
-        };
-    }
-
-    // Typing speed calculation (Words Per Minute)
-    const minutesSpent = time_spent_seconds / 60;
-    const wordsPerMinute = actualWordCount / (minutesSpent || 0.01);
-    
-    // Human maximum threshold check (~140 WPM under strenuous testing)
-    if (wordsPerMinute > 150 && time_spent_seconds < 10) {
-        return {
-            is_passed: false,
-            feedback: "⚠️ INTEGRITY BREACH: Mechanical or automated text streaming bypass detected. Submission disqualified."
-        };
-    }
-
-    // 2. KEYWORD ANALYSIS SCANNER
-    const cleanResponseText = user_response.toLowerCase();
-    const missedKeywords = [];
-
-    mandatory_keywords.forEach(word => {
-        if (!cleanResponseText.includes(word.toLowerCase())) {
-            missedKeywords.push(word);
-        }
-    });
-
-    // If they missed even a single keyword, fail immediately without hitting the API (Saves money!)
-    if (missedKeywords.length > 0) {
-        return {
-            is_passed: false,
-            feedback: `Logic incomplete. Your analytical framework layout failed to evaluate critical vectors. Missing structural core concepts: [${missedKeywords.join(', ')}].`
-        };
-    }
-
-    // 3. SEMANTIC AI EVALUATION VIA GEMINI 1.5 FLASH
-    try {
-        // Constructing a precise, analytical system prompt framework
-        const systemInstruction = `
-            You are the LogicLoom Automated Grading Engine. Your task is to evaluate an analytical user solution against a complex scenario context.
-            
-            SCENARIO CONTEXT: "${scenario_text}"
-            USER RESPONSE: "${user_response}"
-            INTEGRITY METRIC (TAB SWITCHES): ${switch_count}
-
-            CRITICAL EVALUATION PARAMETERS:
-            1. Determine if the user's reasoning is sound, cohesive, and directly answers the problem without rambling.
-            2. If the user's Tab Switch count is greater than 2, be strictly critical of generic, AI-like academic sentences (detecting potential copy bypass notes).
-            3. Return your assessment in a clean JSON format.
-
-            You MUST strictly return the output in this JSON structure, with absolutely no wrapping markdown formatting tags:
-            {
-                "semanticScore": <number 0-100>,
-                "reasoningPassed": <boolean>,
-                "growthModelAnswer": "A comprehensive 2-sentence summary outlining what they structural missed or how to strengthen their frame for future iterations"
-            }
-        `;
-
-        // Execution logic sending payload data over to Google's API model
-        const response = await aiModel.generateContent({
-            contents: [{ role: 'user', parts: [{ text: systemInstruction }] }],
-            generationConfig: { responseMimeType: "application/json" }
-        });
-
-        const aiResult = JSON.parse(response.text);
-
-        // Final qualification cross-check logic
-        if (aiResult.reasoningPassed && switch_count <= 3) {
-            return {
-                is_passed: true,
-                payout_increment: 22.00,
-                feedback: `Scenario Solved! +KES 22.00 successfully added to your Pending Balance.`
-            };
-        } else {
-            return {
-                is_passed: false,
-                feedback: `Logic Incomplete. Correct logic structure: ${aiResult.growthModelAnswer}`
-            };
-        }
-
-    } catch (apiError) {
-        console.error("AI Node Routing Failure:", apiError);
-        return {
-            is_passed: false,
-            feedback: "System Processing Timeout. Please resubmit your logic stack shortly."
-        };
-    }
-}</script>
-
 </body>
 </html>
