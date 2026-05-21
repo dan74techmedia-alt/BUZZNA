@@ -1,13 +1,12 @@
 // ====================================================================
 // LOGICLOOM SECURE BACKEND CORE ENGINE
-// CORE STACK: Node.js + Express + Neon PostgreSQL + Gemini 1.5 Flash
+// CORE STACK: Node.js + Express + Neon PostgreSQL + Direct Gemini API
 // ====================================================================
 
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(express.json());
@@ -15,7 +14,7 @@ app.use(express.json());
 // Serve static frontend files directly from the root directory
 app.use(express.static(__dirname));
 
-// Explicitly route the main domain address to serve your index.html file
+// Route the main domain address to serve your index.html file
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -25,13 +24,6 @@ const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
 });
-
-// 2. GOOGLE GEMINI 1.5 FLASH AI ROUTER INITIALIZATION
-// FIX: Using robust fallback initialization to avoid v1beta pathing drops
-const aiEngine = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-// FIX: Using the strict name string to match Google's standard live API endpoint
-const model = aiEngine.getGenerativeModel({ model: "gemini-1.5-flash" });
-
 
 // ====================================================================
 // API ROUTE 1: USER REGISTRATION & SUBSCRIPTION WEBHOOK SIMULATION
@@ -83,7 +75,6 @@ app.post('/api/users/register', async (req, res) => {
     }
 });
 
-
 // ====================================================================
 // API ROUTE 2: CHALLENGE FETCH (GET TODAY'S SCENARIO)
 // ====================================================================
@@ -107,7 +98,6 @@ app.get('/api/challenges/today', async (req, res) => {
         return res.status(500).json({ error: "Failed to download active daily workspace operational layout." });
     }
 });
-
 
 // ====================================================================
 // API ROUTE 3: HIGH-INTEGRITY MULTI-LAYER LOGIC ANALYSIS GRADER
@@ -186,7 +176,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             return res.status(200).json({ success: false, message: analyticalFailureFeedback });
         }
 
-        // --- LAYER 4 SEMANTIC VERIFICATION: DEPLOYING GEMINI AI MATRIX ---
+        // --- LAYER 4 SEMANTIC VERIFICATION: DIRECT NATIVE API FETCH ---
         const coreSystemInstruction = `
             You are the LogicLoom Automated Assessment Matrix Engine. Evaluate this solution against the scenario.
             
@@ -203,11 +193,26 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             {"semanticScore": 85, "reasoningPassed": true, "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."}
         `;
 
-        // FIX: simplified execution structure to completely avoid version route drops
-        const aiResponseNode = await model.generateContent(coreSystemInstruction);
-        let cleanTextPayload = aiResponseNode.response.text().trim();
+        // FIX: Using native fetch directly to Google's stable v1 production engine endpoint
+        const apiKey = process.env.GEMINI_API_KEY || '';
+        const targetUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+        const apiResponse = await fetch(targetUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: coreSystemInstruction }] }]
+            })
+        });
+
+        if (!apiResponse.ok) {
+            const errorText = await apiResponse.text();
+            throw new Error(`Google API responded with status ${apiResponse.status}: ${errorText}`);
+        }
+
+        const aiData = await apiResponse.json();
+        let cleanTextPayload = aiData.candidates[0].content.parts[0].text.trim();
         
-        // Safety step: strip any unexpected markdown block formats if returned anyway
         if (cleanTextPayload.startsWith("```")) {
             cleanTextPayload = cleanTextPayload.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
         }
@@ -258,11 +263,10 @@ app.post('/api/submissions/evaluate', async (req, res) => {
         console.error("CRITICAL AI GATEWAY ROUTING FAULT:", error.message);
         return res.status(500).json({ 
             success: false, 
-            message: `Core AI pipeline failure: ${error.message}. Check your Render environment keys.` 
+            message: `Core AI pipeline failure: ${error.message}.` 
         });
     }
 });
-
 
 // ====================================================================
 // CORE BACKEND INITIALIZATION PORTS
