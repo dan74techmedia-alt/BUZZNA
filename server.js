@@ -7,15 +7,16 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
+// Standard import structure for Google Generative AI
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 app.use(express.json());
 
-// FIX: Serve static frontend files directly from the root directory instead of a 'public' folder
+// Serve static frontend files directly from the root directory
 app.use(express.static(__dirname));
 
-// Explicitly route the main domain address to serve your index.html file
+// Route the main domain address to serve your index.html file
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -23,11 +24,12 @@ app.get('/', (req, res) => {
 // 1. DATABASE CONNECTION POOL SETUP (Neon PostgreSQL)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false } // Required for Neon cloud routing connections
+    ssl: { rejectUnauthorized: false }
 });
 
 // 2. GOOGLE GEMINI 1.5 FLASH AI ROUTER INITIALIZATION
-const aiEngine = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Optimized initialization sequence using standard structural parameters
+const aiEngine = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const model = aiEngine.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 
@@ -135,7 +137,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             return res.status(403).json({ success: false, message: "🔒 Access Window Closed: Your current Challenge Pass has expired. Re-verify billing layer." });
         }
 
-        // --- LAYER 1 SECURITY VERIFICATION: WORD COUNT baselines ---
+        // --- LAYER 1 SECURITY VERIFICATION: WORD COUNT ---
         const wordsArray = userResponse.trim().split(/\s+/).filter(w => w.length > 0);
         const actualWordCount = wordsArray.length;
 
@@ -164,7 +166,6 @@ app.post('/api/submissions/evaluate', async (req, res) => {
         // --- LAYER 3 SECURITY VERIFICATION: MANDATORY STRUCTURAL KEYWORD MATCHING ---
         const cleanPayloadText = userResponse.toLowerCase();
         const missingKeywords = [];
-        
         const validationArray = challenge.mandatory_keywords || ["sustainability", "capital", "framework"];
         
         validationArray.forEach(keyword => {
@@ -196,16 +197,23 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             EVALUATION DIRECTIVES:
             1. Analyze logic execution clarity, structural viability, and internal consistency.
             2. If telemetry switch infractions are higher than 2, strictly penalize generic, robotic, or textbook phrases.
-            3. Return your output clean and compliant with this absolute JSON layout structure. Do not wrap it in markdown tags or triple backticks:
-            {
-                "semanticScore": 85,
-                "reasoningPassed": true,
-                "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."
-            }
+            3. Return your output completely clean as a raw JSON object string. Do NOT wrap it in backticks, markdown code blocks, or write the word 'json'.
+            
+            EXPECTED JSON FORMAT STRUCTURE:
+            {"semanticScore": 85, "reasoningPassed": true, "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."}
         `;
 
-        const aiResponseNode = await model.generateContent(coreSystemInstruction);
-        const cleanTextPayload = aiResponseNode.response.text().trim();
+        // Modern processing call structure for the continuous API runtime stream
+        const aiResponseNode = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: coreSystemInstruction }] }]
+        });
+        
+        let cleanTextPayload = aiResponseNode.response.text().trim();
+        
+        // Safety step: strip any unexpected markdown code block tags if returned by the AI model anyway
+        if (cleanTextPayload.startsWith("```")) {
+            cleanTextPayload = cleanTextPayload.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
+        }
         
         const gradingMatrix = JSON.parse(cleanTextPayload);
         const logicEvaluationPassed = gradingMatrix.reasoningPassed && switchCount <= 3;
@@ -250,8 +258,12 @@ app.post('/api/submissions/evaluate', async (req, res) => {
         }
 
     } catch (error) {
-        console.error("Critical Runtime System Engine Error during logic analysis evaluation:", error);
-        return res.status(500).json({ success: false, message: "Core AI analysis pipeline routing failure. Please execute submission again." });
+        // Detailed console tracking inside Render logs to instantly spotlight routing details
+        console.error("CRITICAL AI GATEWAY ROUTING FAULT:", error.message);
+        return res.status(500).json({ 
+            success: false, 
+            message: `Core AI pipeline failure: ${error.message}. Check your Render environment keys.` 
+        });
     }
 });
 
