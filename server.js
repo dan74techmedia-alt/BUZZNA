@@ -176,7 +176,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             return res.status(200).json({ success: false, message: analyticalFailureFeedback });
         }
 
-        // --- LAYER 4 SEMANTIC VERIFICATION: DIRECT NATIVE API FETCH ---
+       // --- LAYER 4 SEMANTIC VERIFICATION: DIRECT NATIVE GROQ API FETCH ---
         const coreSystemInstruction = `
             You are the LogicLoom Automated Assessment Matrix Engine. Evaluate this solution against the scenario.
             
@@ -193,8 +193,38 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             {"semanticScore": 85, "reasoningPassed": true, "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."}
         `;
 
-        const apiKey = process.env.GEMINI_API_KEY || '';
+        const groqKey = process.env.GROQ_API_KEY || '';
+        const targetUrl = 'https://api.groq.com/openai/v1/chat/completions';
+
+        const apiResponse = await fetch(targetUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${groqKey}`
+            },
+            body: JSON.stringify({
+                model: 'llama3-70b-8192', // Ultra-fast, high-intelligence structural model
+                messages: [
+                    { role: 'user', content: coreSystemInstruction }
+                ],
+                temperature: 0.1
+            })
+        });
+
+        if (!apiResponse.ok) {
+            const errorText = await apiResponse.text();
+            throw new Error(`Groq API responded with status ${apiResponse.status}: ${errorText}`);
+        }
+
+        const aiData = await apiResponse.json();
+        let cleanTextPayload = aiData.choices[0].message.content.trim();
         
+        // Strip markdown code blocks if the engine forces them
+        if (cleanTextPayload.startsWith("```")) {
+            cleanTextPayload = cleanTextPayload.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
+        }
+        
+        const gradingMatrix = JSON.parse(cleanTextPayload);
         // UNIVERSAL FALLBACK ROUTE: This path works on all Google AI Studio free tier keys
         const targetUrl = `https://generativelanguage.googleapis.com/v1beta1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
