@@ -203,7 +203,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
                 'Authorization': `Bearer ${groqKey}`
             },
             body: JSON.stringify({
-                model: 'llama3-70b-8192', 
+                model: 'llama-3.3-70b-specdec', 
                 messages: [
                     { role: 'user', content: coreSystemInstruction }
                 ],
