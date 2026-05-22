@@ -1,6 +1,6 @@
 // ====================================================================
 // LOGICLOOM SECURE BACKEND CORE ENGINE
-// CORE STACK: Node.js + Express + Neon PostgreSQL + Direct Gemini API
+// CORE STACK: Node.js + Express + Neon PostgreSQL + Direct Groq API
 // ====================================================================
 
 require('dotenv').config();
@@ -176,9 +176,9 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             return res.status(200).json({ success: false, message: analyticalFailureFeedback });
         }
 
-       // --- LAYER 4 SEMANTIC VERIFICATION: DIRECT NATIVE GROQ API FETCH ---
+        // --- LAYER 4 SEMANTIC VERIFICATION: DIRECT NATIVE GROQ API FETCH ---
         const coreSystemInstruction = `
-            You are the LogicLoom Automated Assessment Matrix Engine. Evaluate this solution against the scenario.
+            You are the LogicLoom Automated Assessment Matrix Engine. Evaluate this solution against the scenario context.
             
             SCENARIO CONTEXT: "${challenge.scenario_text}"
             USER INPUT SOLUTION: "${userResponse}"
@@ -187,7 +187,7 @@ app.post('/api/submissions/evaluate', async (req, res) => {
             EVALUATION DIRECTIVES:
             1. Analyze logic execution clarity, structural viability, and internal consistency.
             2. If telemetry switch infractions are higher than 2, strictly penalize generic, robotic, or textbook phrases.
-            3. Return your output completely clean as a raw JSON object string. Do NOT wrap it in backticks, markdown code blocks, or write the word 'json'.
+            3. Your entire response must be a single, valid JSON object matching the schema layout below. Do not add any conversational markdown prefix or suffix text.
             
             EXPECTED JSON FORMAT STRUCTURE:
             {"semanticScore": 85, "reasoningPassed": true, "growthModelAnswer": "State a clean two-sentence constructive insight highlighting what structural element was missing or weak."}
@@ -203,10 +203,11 @@ app.post('/api/submissions/evaluate', async (req, res) => {
                 'Authorization': `Bearer ${groqKey}`
             },
             body: JSON.stringify({
-                model: 'llama3-70b-8192', // Ultra-fast, high-intelligence structural model
+                model: 'llama3-70b-8192', 
                 messages: [
                     { role: 'user', content: coreSystemInstruction }
                 ],
+                response_format: { type: "json_object" }, 
                 temperature: 0.1
             })
         });
@@ -218,31 +219,6 @@ app.post('/api/submissions/evaluate', async (req, res) => {
 
         const aiData = await apiResponse.json();
         let cleanTextPayload = aiData.choices[0].message.content.trim();
-        
-        // Strip markdown code blocks if the engine forces them
-        if (cleanTextPayload.startsWith("```")) {
-            cleanTextPayload = cleanTextPayload.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
-        }
-        
-        const gradingMatrix = JSON.parse(cleanTextPayload);
-        // UNIVERSAL FALLBACK ROUTE: This path works on all Google AI Studio free tier keys
-        const targetUrl = `https://generativelanguage.googleapis.com/v1beta1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
-        const apiResponse = await fetch(targetUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: coreSystemInstruction }] }]
-            })
-        });
-
-        if (!apiResponse.ok) {
-            const errorText = await apiResponse.text();
-            throw new Error(`Google API responded with status ${apiResponse.status}: ${errorText}`);
-        }
-
-        const aiData = await apiResponse.json();
-        let cleanTextPayload = aiData.candidates[0].content.parts[0].text.trim();
         
         if (cleanTextPayload.startsWith("```")) {
             cleanTextPayload = cleanTextPayload.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
