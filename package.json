@@ -1,0 +1,22 @@
+{
+  "name": "buzzna-d74",
+  "version": "1.0.0",
+  "description": "BuzzNa D74: Offline-First Business Operating System",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspaces",
+    "test": "npm test --workspaces --if-present",
+    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
