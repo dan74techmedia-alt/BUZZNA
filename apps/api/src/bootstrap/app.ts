@@ -9,6 +9,8 @@ import { catalogRouter } from '../modules/catalog/catalog.controller';
 import { tillRouter } from '../modules/till/till.controller';
 import { inventoryRouter } from '../modules/inventory/inventory.controller';
 import { salesRouter } from '../modules/sales/sales.controller';
+import { automationRouter } from '../modules/automation/automation.controller';
+import { syncRouter } from '../modules/sync/sync.controller';
 
 export const app = express();
 
@@ -18,19 +20,25 @@ app.use(express.json());
 
 // --- Health Check ---
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.status(200).json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    service: 'DAN74TECHWEB' 
+  });
 });
 
 // --- Public Routes ---
-// Auth is the only module accessible without active tenant context
+// Auth is accessible without tenant context
 app.use('/api/v1/auth', authRouter);
 
 // --- Protected Routes (Tenant-Scoped) ---
-// All routes below require valid tenant/user headers
+// All modules below require valid tenant/user headers
 app.use('/api/v1/catalog', enforceTenantContext, catalogRouter);
 app.use('/api/v1/tills', enforceTenantContext, tillRouter);
 app.use('/api/v1/inventory', enforceTenantContext, inventoryRouter);
 app.use('/api/v1/sales', enforceTenantContext, salesRouter);
+app.use('/api/v1/automations', enforceTenantContext, automationRouter);
+app.use('/api/v1/sync', enforceTenantContext, syncRouter);
 
 // --- Global Error Handler ---
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -40,6 +48,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
+// --- Server Startup ---
 if (require.main === module) {
   app.listen(env.PORT, () => {
     console.log(`[BuzzNa D74] Server operational on port ${env.PORT}`);
