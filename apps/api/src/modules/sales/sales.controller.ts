@@ -1,8 +1,9 @@
 import { Response, Router } from 'express';
-import { sql } from 'kysely';
+import { sql, ExpressionBuilder } from 'kysely';
 import { withTenant } from '../../config/database';
 import { createSaleSchema } from './sales.schema';
 import { AuthenticatedRequest, enforceTenantContext } from '../../common/middleware/tenant-context';
+import { DB } from '../../database/types'; // Ensure this path points to your actual DB interface definition
 
 export const salesRouter = Router();
 salesRouter.use(enforceTenantContext);
@@ -50,15 +51,16 @@ salesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
             tenant_id: tenantId,
             product_id: item.productId,
             event_type: 'SALE_DISPATCH',
-            quantity_delta: (-Math.abs(item.quantity)).toString(), // Must be negative
+            quantity_delta: (-Math.abs(item.quantity)).toString(), 
             unit_selling_price: item.unitPrice.toString(),
             actor_user_id: userId,
           })
           .execute();
 
         // Project cached inventory
+        // Explicitly typed 'eb' to satisfy strict TypeScript requirements
         await trx.updateTable('products')
-          .set((eb) => ({
+          .set((eb: ExpressionBuilder<DB, 'products'>) => ({
             current_quantity: sql`current_quantity - ${item.quantity}`,
           }))
           .where('product_id', '=', item.productId)
@@ -85,8 +87,9 @@ salesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
 
       // 4. Update Till Expected Balance
       if (cashTotal > 0) {
+        // Explicitly typed 'eb'
         await trx.updateTable('till_sessions')
-          .set((eb) => ({
+          .set((eb: ExpressionBuilder<DB, 'till_sessions'>) => ({
             expected_cash_balance: sql`expected_cash_balance + ${cashTotal}`,
           }))
           .where('till_session_id', '=', data.tillSessionId)
