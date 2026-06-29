@@ -5,6 +5,6 @@
 |--------|------:|
 | Total Files | 66 |
 | Total Folders | 45 |
-| OK Files | 45 |
-| Empty Files | 21 |
+| OK Files | 48 |
+| Empty Files | 18 |
 | Error Files | 0 |
