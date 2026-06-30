@@ -1,39 +1,43 @@
-// apps/api/src/modules/till/till.controller.ts
-import { Router, Request, Response, NextFunction } from 'express';
-import { TillService } from './till.service';
-import { validate } from '../../common/middleware/validation.middleware';
-import { openTillSchema, closeTillSchema } from './till.schema';
-import { requireAuth } from '../../common/middleware/auth.middleware';
+import { Response, Router } from 'express';
+import { withTenant, db } from '../../config/database';
+import { openTillSchema } from './till.schema';
+import { AuthenticatedRequest, enforceTenantContext } from '../../common/middleware/tenant-context';
 
-const router = Router();
+export const tillRouter = Router();
+tillRouter.use(enforceTenantContext);
 
-router.use(requireAuth);
-
-router.get('/active', async (req: Request, res: Response, next: NextFunction) => {
+tillRouter.post('/open', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const session = await TillService.getActiveSession(req.user!.tenant_id, req.user!.user_id);
-    res.status(200).json({ data: session });
-  } catch (error) {
-    next(error);
+    const data = openTillSchema.parse(req.body);
+    const tenantId = req.user!.tenantId;
+    const userId = req.user!.userId;
+
+    const session = await withTenant(tenantId, async (trx) => {
+      // Rule: Cashier can only have exactly one open till session active simultaneously
+      const existingSession = await trx.selectFrom('till_sessions')
+        .select('till_session_id')
+        .where('cashier_user_id', '=', userId)
+        .where('status', '=', 'OPEN')
+        .executeTakeFirst();
+
+      if (existingSession) {
+        throw new Error('You already have an open till session.');
+      }
+
+      return await trx.insertInto('till_sessions')
+        .values({
+          tenant_id: tenantId,
+          cashier_user_id: userId,
+          status: 'OPEN',
+          opening_float: data.openingFloat.toString(),
+          expected_cash_balance: data.openingFloat.toString(),
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    });
+
+    res.status(201).json({ message: 'Till session opened', data: session });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Failed to open till session' });
   }
 });
-
-router.post('/open', validate(openTillSchema), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const session = await TillService.openSession(req.user!.tenant_id, req.user!.user_id, req.body);
-    res.status(201).json({ data: session });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/:id/close', validate(closeTillSchema), async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const summary = await TillService.closeSession(req.user!.tenant_id, req.params.id, req.body);
-    res.status(200).json({ data: summary });
-  } catch (error) {
-    next(error);
-  }
-});
-
-export const TillController = router;
