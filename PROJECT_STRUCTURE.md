@@ -75,6 +75,7 @@ apps/
           daraja.controller.ts ✅
           daraja.schema.ts ✅
           daraja.service.ts ✅
+          offlineSmsBridge.ts ✅
         notifications/
           notifications.controller.ts ✅
           notifications.schema.ts ✅
@@ -115,13 +116,19 @@ apps/
         db.ts ✅
         syncmanager.ts ✅
       pages/
+        Billing.tsx ✅
+        Dashboard.tsx ✅
+        Inventory.tsx ✅
         Login.tsx ✅
+        MerchantPayments.tsx ✅
         PosConsole.tsx ✅
+        TillManagement.tsx ✅
       providers/
         ThemeProvider.tsx ✅
     vite.config.ts ✅
 automation/
   project-intelligence.js ✅
+capacitor.config.ts ✅
 database/
   migrations/
     0001_extensions_and_enums.sql ✅
