@@ -5,11 +5,9 @@
 .GitHub/
   workflows/
     project-intelligence.yml ✅
-.gitkeep 🔴 Empty
-PROJECT_PROGRESS.md ✅
-PROJECT_STATUS.md ✅
-PROJECT_STRUCTURE.md ✅
-README.md ✅
+.gitignore ✅
+.vscode/
+  launch.json ✅
 apps/
   .gitkeep 🔴 Empty
   api/
@@ -42,6 +40,7 @@ apps/
         auth/
           auth.controller.ts ✅
           auth.schema.ts ✅
+          auth.service.ts ✅
         automation/
           automation.controller.ts ✅
           automation.schema.ts ✅
@@ -58,6 +57,7 @@ apps/
         inventory/
           inventory.controller.ts ✅
           inventory.schema.ts ✅
+          inventory.service.ts ✅
         merchant-payments/
           daraja.controller.ts ✅
         notifications/
@@ -103,6 +103,9 @@ database/
     0003_roles_users_permissions_auth_tables.sql ✅
     0004_product_categories_products.sql ✅
     0005_inventory_events_stock_counts.sql ✅
+    0006_till_sessions.sql ✅
+    0007_sales_sale_items_payment_allocations_voids_refunds.sql ✅
+package-lock.json ✅
 package.json ✅
 packages/
   .gitkeep 🔴 Empty
@@ -112,4 +115,9 @@ packages/
     .gitkeep 🔴 Empty
   shared-validation/
     .gitkeep 🔴 Empty
+pnpm-workspace.yaml ✅
+PROJECT_PROGRESS.md ✅
+PROJECT_STATUS.md ✅
+PROJECT_STRUCTURE.md ✅
+README.md ✅
 ```
