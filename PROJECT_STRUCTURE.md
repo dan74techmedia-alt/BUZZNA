@@ -51,9 +51,13 @@ apps/
           catalog.controller.ts ✅
           catalog.schema.ts ✅
         customers/
-          .gitkeep 🔴 Empty
+          customers.controller.ts ✅
+          customers.schema.ts 🔴 Empty
+          customers.service.ts 🔴 Empty
         expenses/
-          .gitkeep 🔴 Empty
+          expenses.controller.ts 🔴 Empty
+          expenses.schema.ts 🔴 Empty
+          expenses.service.ts 🔴 Empty
         inventory/
           inventory.controller.ts ✅
           inventory.schema.ts ✅
@@ -67,15 +71,19 @@ apps/
         sales/
           sales.controller.ts ✅
           sales.schema.ts ✅
+          sales.service.ts 🔴 Empty
         suppliers/
-          .gitkeep 🔴 Empty
+          suppliers.controller.ts ✅
+          suppliers.schema.ts ✅
+          suppliers.service.ts ✅
         sync/
           sync.controller.ts ✅
         tenancy/
           .gitkeep 🔴 Empty
         till/
-          tii.schema.ts ✅
           till.controller.ts ✅
+          till.schema.ts ✅
+          till.service.ts ✅
       workers/
         merchant-reconciliation.worker.ts ✅
         projection-rebuild.worker.ts ✅
@@ -105,6 +113,14 @@ database/
     0005_inventory_events_stock_counts.sql ✅
     0006_till_sessions.sql ✅
     0007_sales_sale_items_payment_allocations_voids_refunds.sql ✅
+    0008_expenses.sql ✅
+    0009_customers_customer_ledger_repayments.sql 🔴 Empty
+    0010_suppliers_supplier_transactions.sql 🔴 Empty
+    0011_subscription_plans_invoices_payments_license_audit.sql 🔴 Empty
+    0012_merchant_payment_connections_payments_matches_events.sql 🔴 Empty
+    0013_sync_tables.sql 🔴 Empty
+    0014_automation_notifications_audit.sql ✅
+    0015_views_indexes_rls.sql 🔴 Empty
 package-lock.json ✅
 package.json ✅
 packages/
