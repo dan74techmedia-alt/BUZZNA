@@ -21,7 +21,7 @@ apps/
           AppError.ts ✅
           errorHandler.ts ✅
         logging/
-          logger.ts 🔴 Empty
+          logger.ts ✅
         middleware/
           license-lockdown.middleware.ts ✅
         tenant-context.ts ✅
@@ -69,7 +69,7 @@ apps/
         notifications/
           notifications.controller.ts ✅
           notifications.schema.ts ✅
-          notifications.service.ts 🔴 Empty
+          notifications.service.ts ✅
         rbac/
           rbac.service.ts ✅
         sales/
