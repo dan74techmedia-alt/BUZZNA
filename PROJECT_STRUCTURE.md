@@ -39,6 +39,7 @@ apps/
         .gitkeep 🔴 Empty
         analytics/
           analytics.controller.ts ✅
+          analytics.schema.ts ✅
           analytics.service.ts ✅
         audit-security/
           audit.service.ts ✅
@@ -51,6 +52,8 @@ apps/
           automation.schema.ts ✅
           automation.service.ts ✅
         billing/
+          billing.schema.ts ✅
+          billing.service.ts ✅
           paystack.controller.ts ✅
         catalog/
           catalog.controller.ts ✅
@@ -70,6 +73,8 @@ apps/
           inventory.service.ts ✅
         merchant-payments/
           daraja.controller.ts ✅
+          daraja.schema.ts ✅
+          daraja.service.ts ✅
         notifications/
           notifications.controller.ts ✅
           notifications.schema.ts ✅
@@ -86,6 +91,8 @@ apps/
           suppliers.service.ts ✅
         sync/
           sync.controller.ts ✅
+          sync.schema.ts ✅
+          sync.service.ts ✅
         tenancy/
           tenancy.service.ts ✅
         till/
