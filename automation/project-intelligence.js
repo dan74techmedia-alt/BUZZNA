@@ -92,7 +92,13 @@ ${structureOutput.join("\n")}
 \`\`\`
 `;
 
+ const existing = fs.existsSync("PROJECT_STRUCTURE.md")
+  ? fs.readFileSync("PROJECT_STRUCTURE.md", "utf8")
+  : "";
+
+if (existing !== structureOutput.join("\n")) {
   fs.writeFileSync("PROJECT_STRUCTURE.md", output);
+}
 }
 
 /* -----------------------------
@@ -111,7 +117,14 @@ function generateProgress() {
 | Error Files | ${stats.errorFiles} |
 `;
 
+ const existing = fs.existsSync("PROJECT_PROGRESS.md")
+  ? fs.readFileSync("PROJECT_PROGRESS.md", "utf8")
+  : "";
+
+if (existing !== progress
+) {
   fs.writeFileSync("PROJECT_PROGRESS.md", progress);
+}
 }
 
 /* -----------------------------
@@ -138,7 +151,14 @@ Last Scan:
 ${new Date().toISOString()}
 `;
 
+ const existing = fs.existsSync("PROJECT_STATUS.md")
+  ? fs.readFileSync("PROJECT_STATUS.md", "utf8")
+  : "";
+
+if (existing !== status) {
   fs.writeFileSync("PROJECT_STATUS.md", status);
+}
+
 }
 
 /* -----------------------------
