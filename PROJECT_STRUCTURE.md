@@ -16,6 +16,8 @@ apps/
       .gitkeep 🔴 Empty
       bootstrap/
         app.ts ✅
+        load-env.ts ✅
+        server.ts ✅
       common/
         errors/
           AppError.ts ✅
@@ -28,8 +30,9 @@ apps/
         tenant-context.ts ✅
       config/
         database.ts ✅
+        redis.ts ✅
       db/
-        .gitkeep 🔴 Empty
+        client.ts ✅
         migrations/
           schema.ts ✅
       modules/
@@ -90,8 +93,10 @@ apps/
           till.schema.ts ✅
           till.service.ts ✅
       workers/
+        billing-reminders.worker.ts ✅
         merchant-reconciliation.worker.ts ✅
         projection-rebuild.worker.ts ✅
+        report-exporter.worker.ts ✅
     tsconfig.json ✅
   web/
     index.html ✅
@@ -103,6 +108,7 @@ apps/
         db.ts ✅
         syncmanager.ts ✅
       pages/
+        Login.tsx 🔴 Empty
         PosConsole.tsx ✅
       providers/
         ThemeProvider.tsx ✅

@@ -1,80 +1,121 @@
-// File: apps/api/src/modules/tenancy/tenancy.service.ts
-// Purpose: Manages business-specific configurations and license status validation.
+// apps/api/src/modules/tenancy/tenancy.service.ts
 
-import { PoolClient } from 'pg';
-import { db } from '../../config/database';
-import { LicenseStatusEnum } from '../../../../../packages/shared-types';
+import { executeIsolatedTenantQuery, executeIsolatedTenantTransaction } from '../../db/client';
+import { AppError } from '../../common/errors/AppError';
+import { logger } from '../../common/logging/logger';
 
-export interface IBusinessSettings {
-    application_theme: string;
-    cash_drawer_variance_limit: string; // Numeric string
-    enforce_blind_close: boolean;
+export interface BusinessProfile {
+  tenant_id: string;
+  legal_name: string;
+  trade_name: string | null;
+  license_status: 'TRIAL_ACTIVE' | 'FULLY_ACTIVATED' | 'PAYMENT_DUE' | 'GRACE_PERIOD' | 'SUSPENDED_NON_PAYMENT';
+  license_expires_at: Date;
+}
+
+export interface BusinessSettings {
+  default_tax_rate: number;
+  currency_code: string;
+  timezone: string;
+  receipt_footer_message: string | null;
 }
 
 export class TenancyService {
-    
-    /**
-     * Retrieves business settings for a specific tenant.
-     * Enforces strict tenant isolation.
-     */
-    static async getBusinessSettings(tenantId: string): Promise<IBusinessSettings> {
-        const client: PoolClient = await db.connect();
-        try {
-            await client.query('BEGIN');
-            await client.query('SET LOCAL app.current_tenant_id = $1', [tenantId]);
+  /**
+   * Retrieves the core SaaS entitlement snapshot for the active business.
+   * Required for the UI to enforce feature lockdowns locally via IndexedDB business_snapshot.
+   */
+  static async getBusinessProfile(tenantId: string): Promise<BusinessProfile> {
+    return executeIsolatedTenantQuery(tenantId, async (client) => {
+      const query = `
+        SELECT tenant_id, legal_name, trade_name, license_status, license_expires_at 
+        FROM businesses 
+        WHERE tenant_id = $1
+        LIMIT 1;
+      `;
+      
+      const result = await client.query<BusinessProfile>(query, [tenantId]);
+      
+      if (result.rows.length === 0) {
+        throw new AppError('Business profile not found or access completely restricted by RLS.', 404);
+      }
+      
+      return result.rows[0];
+    });
+  }
 
-            const query = `
-                SELECT application_theme, cash_drawer_variance_limit, enforce_blind_close
-                FROM business_settings
-                WHERE tenant_id = $1
-            `;
-            const { rows } = await client.query(query, [tenantId]);
-            
-            await client.query('COMMIT');
+  /**
+   * Fetches operational configuration settings bound to the specific tenant.
+   */
+  static async getBusinessSettings(tenantId: string): Promise<BusinessSettings> {
+    return executeIsolatedTenantQuery(tenantId, async (client) => {
+      const query = `
+        SELECT default_tax_rate, currency_code, timezone, receipt_footer_message 
+        FROM business_settings 
+        WHERE tenant_id = $1
+        LIMIT 1;
+      `;
+      
+      const result = await client.query<BusinessSettings>(query, [tenantId]);
+      
+      if (result.rows.length === 0) {
+        throw new AppError('Business settings configuration missing for active tenant.', 404);
+      }
+      
+      return result.rows[0];
+    });
+  }
 
-            if (rows.length === 0) {
-                throw new Error('TENANCY_ERROR: Business settings not initialized.');
-            }
+  /**
+   * Updates mutable business settings. Enforces strict write encapsulation.
+   */
+  static async updateBusinessSettings(
+    tenantId: string, 
+    updates: Partial<BusinessSettings>
+  ): Promise<BusinessSettings> {
+    return executeIsolatedTenantTransaction(tenantId, async (client) => {
+      const fields: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
 
-            return rows[0] as IBusinessSettings;
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
-    }
+      if (updates.default_tax_rate !== undefined) {
+        fields.push(`default_tax_rate = $${paramIndex++}`);
+        values.push(updates.default_tax_rate);
+      }
+      if (updates.currency_code !== undefined) {
+        fields.push(`currency_code = $${paramIndex++}`);
+        values.push(updates.currency_code);
+      }
+      if (updates.timezone !== undefined) {
+        fields.push(`timezone = $${paramIndex++}`);
+        values.push(updates.timezone);
+      }
+      if (updates.receipt_footer_message !== undefined) {
+        fields.push(`receipt_footer_message = $${paramIndex++}`);
+        values.push(updates.receipt_footer_message);
+      }
 
-    /**
-     * Validates if the current tenant's license is active.
-     * Used by middleware to block unauthorized/expired access.
-     */
-    static async validateLicenseStatus(tenantId: string): Promise<boolean> {
-        const client: PoolClient = await db.connect();
-        try {
-            await client.query('BEGIN');
-            await client.query('SET LOCAL app.current_tenant_id = $1', [tenantId]);
+      if (fields.length === 0) {
+        throw new AppError('No valid settings provided for update operation.', 400);
+      }
 
-            const { rows } = await client.query(`
-                SELECT license_status, license_expires_at 
-                FROM businesses 
-                WHERE tenant_id = $1
-            `, [tenantId]);
+      // Add tenant_id to values array for the WHERE clause isolation validation
+      values.push(tenantId);
 
-            await client.query('COMMIT');
+      const query = `
+        UPDATE business_settings 
+        SET ${fields.join(', ')}, updated_at = NOW() 
+        WHERE tenant_id = $${paramIndex}
+        RETURNING default_tax_rate, currency_code, timezone, receipt_footer_message;
+      `;
 
-            if (rows.length === 0) return false;
+      const result = await client.query<BusinessSettings>(query, values);
 
-            const { license_status, license_expires_at } = rows[0];
-            const isExpired = new Date(license_expires_at) < new Date();
+      if (result.rows.length === 0) {
+        throw new AppError('Failed to apply settings update. RLS constraint failure or missing tenant context.', 500);
+      }
 
-            return license_status === LicenseStatusEnum.FULLY_ACTIVATED || 
-                   (license_status === LicenseStatusEnum.TRIAL_ACTIVE && !isExpired);
-        } catch (error) {
-            await client.query('ROLLBACK');
-            return false;
-        } finally {
-            client.release();
-        }
-    }
+      logger.info(`Business settings successfully mutated for Tenant ID: ${tenantId}`);
+      return result.rows[0];
+    });
+  }
 }
