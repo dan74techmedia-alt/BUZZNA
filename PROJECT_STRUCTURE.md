@@ -108,7 +108,7 @@ apps/
         db.ts ✅
         syncmanager.ts ✅
       pages/
-        Login.tsx 🔴 Empty
+        Login.tsx ✅
         PosConsole.tsx ✅
       providers/
         ThemeProvider.tsx ✅
