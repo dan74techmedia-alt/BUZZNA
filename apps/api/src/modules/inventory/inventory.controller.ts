@@ -1,86 +1,39 @@
-import { Response, Router } from 'express';
-import { sql } from 'kysely';
-import { db, withTenant } from '../../config/database';
-import { restockSchema } from './inventory.schema';
-import { AuthenticatedRequest, enforceTenantContext } from '../../common/middleware/tenant-context';
-import { AutomationEngine } from '../automation/automation.service';
+// File: apps/api/src/modules/inventory/inventory.controller.ts
+// Purpose: Exposes inventory management endpoints to the frontend.
 
-export const inventoryRouter = Router();
+import { Request, Response } from 'express';
+import { InventoryService } from './inventory.service';
+import { ITenantContext } from '../../../../packages/shared-types';
 
-// Apply tenant context enforcement to all routes
-inventoryRouter.use(enforceTenantContext);
+export class InventoryController {
+    
+    static async handleStockAdjustment(req: Request, res: Response) {
+        const { tenantId } = req.body.context as ITenantContext;
+        const { product_id, event_type, quantity_delta, reason } = req.body;
 
-// --- RESTock Endpoint ---
-inventoryRouter.post('/restocks', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const data = restockSchema.parse(req.body);
-    const tenantId = req.user!.tenantId;
-    const userId = req.user!.userId;
+        try {
+            await InventoryService.recordEvent(tenantId, {
+                product_id,
+                event_type,
+                quantity_delta,
+                reason
+            });
+            
+            res.status(201).json({ success: true, message: 'Inventory event recorded successfully.' });
+        } catch (error) {
+            res.status(400).json({ success: false, error: (error as Error).message });
+        }
+    }
 
-    const result = await withTenant(tenantId, async (trx) => {
-      // 1. Append the authoritative log row
-      const event = await trx.insertInto('inventory_events')
-        .values({
-          tenant_id: tenantId,
-          product_id: data.productId,
-          event_type: 'STOCK_ADD',
-          reason_code: data.reasonCode || 'RESTOCK',
-          quantity_delta: data.quantityDelta.toString(),
-          unit_buying_price: data.unitBuyingPrice?.toString() || null,
-          unit_selling_price: data.unitSellingPrice?.toString() || null,
-          actor_user_id: userId,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
+    static async getHistory(req: Request, res: Response) {
+        const { tenantId } = req.body.context as ITenantContext;
+        const { productId } = req.params;
 
-      // 2. Update Product Quantity (UI Projection Cache)
-      await trx.updateTable('products')
-        .set((eb) => ({
-          current_quantity: sql`current_quantity + ${data.quantityDelta}`,
-        }))
-        .where('product_id', '=', data.productId)
-        .execute();
-
-      return event;
-    });
-
-    res.status(201).json({ message: 'Restock event logged', data: result });
-  } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Failed to process restock' });
-  }
-});
-
-// --- Internal Helper: Stock Deduction ---
-/**
- * Processes a stock deduction and triggers automation hooks
- * Logic uses fire-and-forget for the AutomationEngine to ensure performance
- */
-export async function processStockDeduction(
-  tenantId: string, 
-  productId: string, 
-  quantitySold: number
-): Promise<void> {
-  // 1. Perform Deduction
-  // Assumes a centralized deduction service exists or direct DB query
-  const newQuantity = await db.updateTable('products')
-    .set((eb) => ({
-      current_quantity: sql`current_quantity - ${quantitySold}`,
-    }))
-    .where('product_id', '=', productId)
-    .returning('current_quantity')
-    .executeTakeFirstOrThrow();
-
-  // 2. Fetch product details for context
-  const product = await db.selectFrom('products')
-    .selectAll()
-    .where('product_id', '=', productId)
-    .executeTakeFirstOrThrow();
-
-  // 3. Fire-and-forget Automation Engine (Async)
-  AutomationEngine.processEvent(tenantId, 'LOW_STOCK', {
-    product_id: productId,
-    product_name: product.name,
-    current_quantity: Number(newQuantity.current_quantity),
-    supplier_id: product.primary_supplier_id
-  }).catch((err) => console.error(`[Automation Error]: ${err.message}`));
+        try {
+            const history = await InventoryService.getEventHistory(tenantId, productId);
+            res.json({ success: true, data: history });
+        } catch (error) {
+            res.status(500).json({ success: false, error: 'Failed to fetch event history.' });
+        }
+    }
 }

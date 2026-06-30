@@ -36,7 +36,7 @@ apps/
           analytics.controller.ts ✅
           analytics.service.ts ✅
         audit-security/
-          .gitkeep 🔴 Empty
+          audit.service.ts ✅
         auth/
           auth.controller.ts ✅
           auth.schema.ts ✅
@@ -50,6 +50,7 @@ apps/
         catalog/
           catalog.controller.ts ✅
           catalog.schema.ts ✅
+          catalog.service.ts ✅
         customers/
           customers.controller.ts ✅
           customers.schema.ts ✅
@@ -67,7 +68,7 @@ apps/
         notifications/
           .gitkeep 🔴 Empty
         rbac/
-          .gitkeep 🔴 Empty
+          rbac.service.ts ✅
         sales/
           sales.controller.ts ✅
           sales.schema.ts ✅
@@ -79,7 +80,7 @@ apps/
         sync/
           sync.controller.ts ✅
         tenancy/
-          .gitkeep 🔴 Empty
+          tenancy.service.ts ✅
         till/
           till.controller.ts ✅
           till.schema.ts ✅
@@ -121,12 +122,13 @@ database/
     0013_sync_tables.sql ✅
     0014_automation_notifications_audit.sql ✅
     0015_views_indexes_rls.sql ✅
+    0016_seed_core.sql 🔴 Empty
 package-lock.json ✅
 package.json ✅
 packages/
   .gitkeep 🔴 Empty
   shared-types/
-    .gitkeep 🔴 Empty
+    index.ts ✅
   shared-utils/
     .gitkeep 🔴 Empty
   shared-validation/
