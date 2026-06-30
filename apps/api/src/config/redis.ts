@@ -37,6 +37,6 @@ redisCacheClient.on('connect', () => {
   logger.info('Asynchronous memory fabric connection initialized successfully via ioredis.');
 });
 
-redisCacheClient.on('error', (error) => {
+redisCacheClient.on('error', (error: Error) => {
   logger.error('Critical failure detected in system asynchronous Redis cache client:', error);
 });

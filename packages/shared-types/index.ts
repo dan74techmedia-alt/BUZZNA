@@ -1,49 +1,78 @@
-// File: packages/shared-types/index.ts
-// Purpose: Single source of truth for exact DB schema enums and interfaces across API and PWA.
+// ============================================================================
+// BUZZNA D74 SHARED TYPES
+// Single Source of Truth for API Monolith and PWA Frontend
+// ============================================================================
 
-export enum LicenseStatusEnum {
-    TRIAL_ACTIVE = 'TRIAL_ACTIVE',
-    PAYMENT_DUE = 'PAYMENT_DUE',
-    GRACE_PERIOD = 'GRACE_PERIOD',
-    SUSPENDED_NON_PAYMENT = 'SUSPENDED_NON_PAYMENT',
-    FULLY_ACTIVATED = 'FULLY_ACTIVATED'
+export type LicenseStatus = 'TRIAL_ACTIVE' | 'PAYMENT_DUE' | 'GRACE_PERIOD' | 'SUSPENDED_NON_PAYMENT' | 'FULLY_ACTIVATED';
+export type PaymentMethod = 'CASH' | 'MPESA' | 'DEBT';
+export type PaymentStatus = 'PENDING' | 'COMPLETED_VERIFIED' | 'REFUNDED';
+export type EventType = 'STOCK_ADD' | 'SALE_DISPATCH' | 'REFUND_RETURN' | 'MANUAL_ADJUSTMENT';
+
+export interface BusinessTenant {
+  tenantId: string; // UUID
+  legalName: string;
+  tradeName?: string;
+  licenseStatus: LicenseStatus;
+  licenseExpiresAt: string; // ISO-8601 Date String
 }
 
-export enum SaleStatusEnum {
-    DRAFT = 'DRAFT',
-    PENDING = 'PENDING',
-    COMPLETED_VERIFIED = 'COMPLETED_VERIFIED',
-    REFUNDED = 'REFUNDED',
-    VOIDED = 'VOIDED'
+export interface User {
+  userId: string; // UUID
+  tenantId: string; // UUID
+  roleId: string; // UUID
+  username: string;
+  phoneNumber: string; // MSISDN E.164
 }
 
-export enum TillStatusEnum {
-    OPEN = 'OPEN',
-    REVIEW_REQUIRED = 'REVIEW_REQUIRED',
-    CLOSED = 'CLOSED'
+export interface Product {
+  productId: string; // UUID
+  tenantId: string; // UUID
+  barcode: string;
+  costFloor: string; // Exact Numeric String (NUMERIC(12,2))
+  retailPrice: string; // Exact Numeric String (NUMERIC(12,2))
+  currentQuantity: string; // Cached Projection Only (NUMERIC(15,3))
 }
 
-export enum SyncStatusEnum {
-    SYNC_PENDING = 'SYNC_PENDING',
-    SYNC_SUCCESS = 'SYNC_SUCCESS',
-    SYNC_PARTIAL = 'SYNC_PARTIAL',
-    SYNC_FAILED = 'SYNC_FAILED'
+export interface InventoryEvent {
+  eventId: string; // UUID
+  tenantId: string; // UUID
+  productId: string; // UUID
+  eventType: EventType;
+  reasonCode?: string;
+  quantityDelta: string; // Exact Numeric String (NUMERIC(15,3))
+  terminalTimestamp: string; // ISO-8601 Date String
 }
 
-export enum RoleMatrixEnum {
-    OWNER = 'Owner',
-    MANAGER = 'Manager',
-    CASHIER = 'Cashier',
-    ACCOUNTANT = 'Accountant'
+export interface SaleTransaction {
+  transactionId: string; // UUID
+  tenantId: string; // UUID
+  sessionId: string; // UUID
+  paymentMethod: PaymentMethod;
+  paymentStatus: PaymentStatus;
+  grossTotal: string; // Exact Numeric String (NUMERIC(12,2))
+  terminalTimestamp: string;
 }
 
-export interface ITenantContext {
-    tenantId: string;
-    userId: string;
-    role: RoleMatrixEnum;
-    licenseStatus: LicenseStatusEnum;
+export interface TillSession {
+  sessionId: string; // UUID
+  tenantId: string; // UUID
+  cashierUserId: string; // UUID
+  openingFloat: string; // Exact Numeric String (NUMERIC(12,2))
+  expectedCashBalance?: string;
+  actualCashBalance?: string;
+  status: 'OPEN' | 'REVIEW_REQUIRED' | 'CLOSED_VERIFIED';
 }
 
-// Decimal Integrity Validation (Mapped to NUMERIC 15,2 and 15,3 in Postgres)
-export type ExactDecimalAmount = string; // Stored and transmitted as string to prevent JS floating point loss
-export type ExactQuantity = string;
+export interface SyncEventPayload {
+  syncId: string; // UUID for idempotency
+  table: 'sales_transactions' | 'inventory_events' | 'till_sessions';
+  operation: 'INSERT' | 'UPDATE';
+  data: Record<string, any>;
+  timestamp: string; // LWW Timestamp resolution
+}
+
+export interface SyncBatch {
+  terminalId: string;
+  tenantId: string;
+  events: SyncEventPayload[];
+}

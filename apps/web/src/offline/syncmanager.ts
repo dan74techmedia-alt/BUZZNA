@@ -23,7 +23,8 @@ export class WalkawaySyncManager {
   private statusListeners: Array<(status: SyncEngineStatusReport) => void> = [];
 
   private constructor() {
-    this.apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+    const env = (import.meta as any).env || {};
+    this.apiBaseUrl = env.VITE_API_BASE_URL || '/api/v1';
     this.initializeNetworkEventInterceptors();
   }
 
@@ -295,12 +296,12 @@ export class WalkawaySyncManager {
    */
   private initializeNetworkEventInterceptors(): void {
     window.addEventListener('online', () => {
-      logger.info('Network state transition caught: Client online mode unlocked. Flushing data paths.');
+      console.info('Network state transition caught: Client online mode unlocked. Flushing data paths.');
       this.executeBackgroundSyncCycle().catch(() => {});
     });
 
     window.addEventListener('offline', () => {
-      logger.warn('Network state transition caught: Client entered offline mode. Enforcing local data queuing.');
+      console.warn('Network state transition caught: Client entered offline mode. Enforcing local data queuing.');
       this.broadcastCurrentStatus();
     });
   }
