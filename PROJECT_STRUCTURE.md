@@ -122,7 +122,7 @@ database/
     0013_sync_tables.sql ✅
     0014_automation_notifications_audit.sql ✅
     0015_views_indexes_rls.sql ✅
-    0016_seed_core.sql 🔴 Empty
+    0016_seed_core.sql ✅
 package-lock.json ✅
 package.json ✅
 packages/
