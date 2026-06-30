@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node-terminal",
+      "request": "launch",
+      "name": "Debug BuzzNa API",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/apps/api"
+    }
+  ]
+}
