@@ -18,9 +18,10 @@ apps/
         app.ts ✅
       common/
         errors/
-          .gitkeep 🔴 Empty
+          AppError.ts ✅
+          errorHandler.ts ✅
         logging/
-          .gitkeep 🔴 Empty
+          logger.ts 🔴 Empty
         middleware/
           license-lockdown.middleware.ts ✅
         tenant-context.ts ✅
@@ -66,7 +67,9 @@ apps/
         merchant-payments/
           daraja.controller.ts ✅
         notifications/
-          .gitkeep 🔴 Empty
+          notifications.controller.ts ✅
+          notifications.schema.ts ✅
+          notifications.service.ts 🔴 Empty
         rbac/
           rbac.service.ts ✅
         sales/
@@ -130,9 +133,9 @@ packages/
   shared-types/
     index.ts ✅
   shared-utils/
-    .gitkeep 🔴 Empty
+    index.ts 🔴 Empty
   shared-validation/
-    .gitkeep 🔴 Empty
+    index.ts ✅
 pnpm-workspace.yaml ✅
 PROJECT_PROGRESS.md ✅
 PROJECT_STATUS.md ✅
