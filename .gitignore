@@ -3,3 +3,6 @@ dist/
 build/
 .env
 coverage/
+PROJECT_PROGRESS.md
+PROJECT_STATUS.md
+PROJECT_STRUCTURE.md
