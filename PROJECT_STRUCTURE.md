@@ -23,6 +23,7 @@ apps/
         logging/
           logger.ts ✅
         middleware/
+          auth.middleware.ts ✅
           license-lockdown.middleware.ts ✅
         tenant-context.ts ✅
       config/

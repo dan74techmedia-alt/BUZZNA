@@ -1,4 +1,4 @@
-vimport { Request } from 'express';
+import { Request } from 'express';
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'FATAL';
 
@@ -9,6 +9,13 @@ interface LogMetadata {
   method?: string;
   durationMs?: number;
   [key: string]: any;
+}
+
+interface RequestWithContext extends Request {
+  context?: {
+    tenantId?: string;
+    userId?: string;
+  };
 }
 
 /**
@@ -53,7 +60,7 @@ class Logger {
   /**
    * Helper to extract standard tracking metadata from an Express request context.
    */
-  public extractRequestMeta(req: Request): LogMetadata {
+  public extractRequestMeta(req: RequestWithContext): LogMetadata {
     return {
       tenantId: req.context?.tenantId,
       userId: req.context?.userId,

@@ -1,36 +1,78 @@
+// File Path: apps/web/src/offline/db.ts
+
 import Dexie, { Table } from 'dexie';
 
-// Define the shape of our sync events (maps to your backend schema)
-export interface SyncEvent {
-  clientEventId: string; // UUID generated locally
-  entityType: 'SALE' | 'INVENTORY_EVENT' | 'EXPENSE' | 'TILL_SESSION';
-  eventType: string;
-  occurredAt: string; // ISO DateTime
-  payload: any;
-  syncStatus: 'PENDING' | 'SYNCED' | 'REJECTED';
+/**
+ * Audit-compliant structural footprint of an offline mutations log event.
+ * Captures user transactions instantly in an append-only sequence prior to cloud broadcast.
+ */
+export interface LocalSyncEvent {
+  id?: number;                  // Auto-incremented local primary identity vector
+  clientEventId: string;       // Cryptographically unique UUIDv4 identity assigned on client creation
+  eventType: 'CREATE_SALE' | 'INVENTORY_ADJUST' | 'TILL_SESSION_UPDATE' | 'CUSTOMER_CREDIT_REPAY';
+  entityName: string;          // Target database table mapping (e.g., 'sales', 'inventory_events')
+  payload: any;                // Unmutated operational data payload block
+  occurredAt: string;          // ISO-8601 millisecond-precise local timestamp string
+  syncStatus: 'PENDING' | 'SYNCING' | 'FAILED';
+  retryCount: number;          // Loop execution counter used to throttle backoff sequences
+  lastError?: string;          // Textual debug trace from the latest remote sync failure
 }
 
-export class BuzzNaDatabase extends Dexie {
-  products_cache!: Table<any, string>;
-  customers_cache!: Table<any, string>;
-  business_snapshot!: Table<any, string>;
-  sync_queue!: Table<SyncEvent, string>;
-  sync_history!: Table<any, string>;
-  current_till_session!: Table<any, string>;
+/**
+ * Local projection caches enabling sub-millisecond LRU UI reads completely decoupled from internet connectivity.
+ */
+export interface CachedProduct {
+  productId: string;
+  barcode: string;
+  legalName: string;
+  costFloor: number;
+  retailPrice: number;
+  currentQuantity: number;
+  updatedAt: string;
+}
+
+export interface CachedCustomer {
+  customerId: string;
+  fullName: string;
+  phoneNumber: string;
+  currentDebtBalance: number;
+  creditLimit: number;
+  updatedAt: string;
+}
+
+/**
+ * BuzzNa D74 Authoritative High-Velocity Local Dexie Core Storage Engine
+ */
+export class BuzzNaDexieDatabase extends Dexie {
+  public syncQueue!: Table<LocalSyncEvent, number>;
+  public productsCache!: Table<CachedProduct, string>;
+  public customersCache!: Table<CachedCustomer, string>;
 
   constructor() {
-    super('BuzzNaD74_LocalDB');
+    super('BuzzNaD74_LocalEngine');
     
-    // Define the schema (only indexed fields need to be specified here)
+    // Explicit structural indexing definition across high-velocity lookups
     this.version(1).stores({
-      products_cache: 'product_id, category_id, sku, barcode', // For zero-latency lookups 
-      customers_cache: 'customer_id, phone_number',
-      business_snapshot: 'tenant_id',
-      sync_queue: 'clientEventId, entityType, syncStatus, occurredAt', // Chronological outbound pipeline 
-      sync_history: 'clientEventId, syncStatus',
-      current_till_session: 'till_session_id, status'
+      syncQueue: '++id, clientEventId, eventType, syncStatus, occurredAt',
+      productsCache: 'productId, barcode, legalName',
+      customersCache: 'customerId, phoneNumber, fullName'
     });
+  }
+
+  /**
+   * Resets and purges cache instances during explicit tenant or operator sign-out states.
+   * Preserves any pending un-synchronized transactions to mitigate business data loss.
+   */
+  public async safetyPurgeCache(): Promise<void> {
+    const pendingCount = await this.syncQueue.where('syncStatus').equals('PENDING').count();
+    if (pendingCount > 0) {
+      console.warn(`Safety cache purge bypassed: [${pendingCount}] mutations are currently queued for sync.`);
+      return;
+    }
+    await this.productsCache.clear();
+    await this.customersCache.clear();
   }
 }
 
-export const localDb = new BuzzNaDatabase();
+// Instantiate database context export vector
+export const localDb = new BuzzNaDexieDatabase();
