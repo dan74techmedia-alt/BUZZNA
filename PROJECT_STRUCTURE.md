@@ -132,7 +132,7 @@ packages/
   shared-types/
     index.ts ✅
   shared-utils/
-    index.ts 🔴 Empty
+    index.ts ✅
   shared-validation/
     index.ts ✅
 pnpm-workspace.yaml ✅
