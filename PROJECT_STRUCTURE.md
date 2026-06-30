@@ -129,7 +129,6 @@ database/
 package-lock.json ✅
 package.json ✅
 packages/
-  .gitkeep 🔴 Empty
   shared-types/
     index.ts ✅
   shared-utils/

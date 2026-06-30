@@ -3,8 +3,8 @@
 
 | Metric | Value |
 |--------|------:|
-| Total Files | 94 |
+| Total Files | 93 |
 | Total Folders | 46 |
 | OK Files | 86 |
-| Empty Files | 8 |
+| Empty Files | 7 |
 | Error Files | 0 |
