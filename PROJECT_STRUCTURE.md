@@ -11,6 +11,8 @@
 apps/
   .gitkeep 🔴 Empty
   api/
+    .env ✅
+    package-lock.json ✅
     package.json ✅
     src/
       bootstrap/
@@ -34,7 +36,7 @@ apps/
         client.ts ✅
         migrations/
           schema.ts ✅
-      index.ts 🔴 Empty
+      index.ts ✅
       modules/
         .gitkeep 🔴 Empty
         analytics/
@@ -107,6 +109,7 @@ apps/
         report-exporter.worker.ts ✅
     tsconfig.json ✅
   web/
+    .env ✅
     index.html ✅
     package.json ✅
     src/

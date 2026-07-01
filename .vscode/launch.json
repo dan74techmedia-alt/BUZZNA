@@ -2,11 +2,27 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "type": "node-terminal",
+      "type": "node",
       "request": "launch",
-      "name": "Debug BuzzNa API",
-      "command": "npm run dev",
-      "cwd": "${workspaceFolder}/apps/api"
+      "name": "Debug Backend API",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "${workspaceFolder}/apps/api",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Debug Frontend Web",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/web/src"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug Entire Project",
+      "configurations": ["Debug Backend API", "Debug Frontend Web"]
     }
   ]
 }
