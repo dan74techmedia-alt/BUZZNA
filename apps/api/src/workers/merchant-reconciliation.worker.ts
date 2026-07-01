@@ -1,327 +1,265 @@
-// apps/api/src/workers/merchant-reconciliation.worker.ts
-
-import { Worker, Job } from 'bullmq';
-import { redis } from '../config/redis';
-import { db } from '../db/client';
-import { logger } from '../common/logging/logger';
-import { queues } from '../config/queues';
-
 /**
- * Merchant Reconciliation Worker
+ * ============================================================================
+ * BUZZNA D74 - Merchant Reconciliation Worker
+ * ============================================================================
  *
- * SCHEDULED TASK: Runs every 30 minutes
+ * PURPOSE:
+ * - Matches unlinked Safaricom M-Pesa receipts with pending POS sales
+ * - Reconciles merchant revenue streams (Daraja payments vs checkout totals)
+ * - Updates payment matching status
+ * - Flags unmatched payments for manual review
  *
- * Matches offline-first Daraja M-Pesa receipts to pending POS sales transactions.
+ * SCHEDULED: Runs every 30 minutes
  *
- * Problem:
- * - Mobile money (Daraja) requires webhooks to confirm payments
- * - In offline mode, terminals can't reach the webhook endpoint
- * - Customers pay via SMS (MPESA confirmation received locally)
- * - Terminal records sale with PAYMENT_PENDING status
- * - When connectivity restored, need to match SMS receipt to sale
+ * FLOW:
+ * 1. Query unmatched merchant_payments (status = PENDING)
+ * 2. Query unmatched sale_payment_allocations (payment_method = MPESA, not yet reconciled)
+ * 3. Use heuristic matching:
+ *    - Amount match (±5 KES tolerance for fees)
+ *    - Timestamp proximity (within 5 minutes)
+ *    - Customer phone/name if available
+ * 4. Create payment_matches records
+ * 5. Flag low-confidence matches for manual review
  *
- * Solution:
- * 1. Query all PAYMENT_PENDING sales with payment_method='MPESA'
- * 2. Query all unmatched merchant_payment_events from Daraja
- * 3. Apply fuzzy matching heuristics:
- *    - Customer phone + amount + timestamp (±30 min window)
- *    - Daraja reference ID + POS transaction ID
- * 4. Auto-match high-confidence pairs (>95%)
- * 5. Flag medium-confidence pairs (85-95%) for manual review
- * 6. Send notifications to account manager for manual matches
- *
- * Architecture Rules:
- * - Never auto-match with confidence < 85%
- * - All matches logged to merchant_payment_matches table (append-only)
- * - Failed reconciliation creates attention card for business owner
- * - Respects business timezone for transaction dating
+ * ============================================================================
  */
 
-interface PendingMpesaSale {
-  transactionId: string;
-  tenantId: string;
-  phoneNumber: string;
-  amount: string; // NUMERIC stored as string to preserve precision
-  createdAt: Date;
-  customerName?: string;
+import { Worker, Job } from 'bullmq';
+import { db, withTenant } from '../config/database';
+import { queueConnectionConfig } from '../config/redis';
+import { logger } from '../common/logging/logger';
+import { v4 as uuidv4 } from 'uuid';
+
+interface MerchantPayment {
+  payment_id: string;
+  tenant_id: string;
+  phone_number: string;
+  amount: string;
+  mpesa_code: string;
+  received_at: Date;
 }
 
-interface UnmatchedDarajaEvent {
-  eventId: string;
-  tenantId: string;
-  phoneNumber: string;
+interface PendingSale {
+  allocation_id: string;
+  sale_id: string;
+  tenant_id: string;
   amount: string;
-  reference: string;
-  receivedAt: Date;
-  metadata: any;
+  created_at: Date;
 }
 
 interface MatchResult {
-  saleTxnId: string;
-  darajaEventId: string;
-  confidence: number; // 0-100
-  matchReason: string;
+  merchant_payment_id: string;
+  sale_allocation_id: string;
+  confidence: number;
+  matched_at: Date;
 }
 
 /**
- * Get pending MPESA sales awaiting reconciliation
+ * Get unmatched merchant payments
  */
-async function getPendingMpesaSales(): Promise<PendingMpesaSale[]> {
+async function getUnmatchedMerchantPayments(tenantId: string): Promise<MerchantPayment[]> {
   try {
-    const results = await db
-      .selectFrom('sales_transactions' as any)
+    const payments = await db
+      .selectFrom('merchant_payments')
       .selectAll()
+      .where('tenant_id', '=', tenantId)
+      .where('status', '=', 'PENDING')
+      .where('matched_at', 'is', null)
+      .orderBy('received_at', 'desc')
+      .limit(100)
+      .execute();
+
+    return payments as MerchantPayment[];
+  } catch (error) {
+    logger.error('Failed to fetch unmatched merchant payments', { error });
+    throw error;
+  }
+}
+
+/**
+ * Get unmatched MPESA sales allocations
+ */
+async function getUnmatchedMPESASales(tenantId: string): Promise<PendingSale[]> {
+  try {
+    const sales = await db
+      .selectFrom('sale_payment_allocations')
+      .select([
+        'allocation_id',
+        'sale_id',
+        'tenant_id',
+        'amount',
+        'created_at',
+      ])
+      .where('tenant_id', '=', tenantId)
       .where('payment_method', '=', 'MPESA')
-      .where('payment_status', '=', 'PENDING')
-      .where(
-        'created_at',
-        '>=',
-        new Date(Date.now() - 24 * 60 * 60 * 1000) // Last 24 hours
-      )
+      .where('merchant_payment_id', 'is', null)
+      .orderBy('created_at', 'desc')
+      .limit(100)
       .execute();
 
-    return results.map((row: any) => ({
-      transactionId: row.transaction_id,
-      tenantId: row.tenant_id,
-      phoneNumber: row.customer_phone || '',
-      amount: row.gross_total.toString(),
-      createdAt: new Date(row.created_at),
-      customerName: row.customer_name,
-    }));
+    return sales as PendingSale[];
   } catch (error) {
-    logger.error('Failed to fetch pending MPESA sales', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error('Failed to fetch unmatched MPESA sales', { error });
     throw error;
   }
 }
 
 /**
- * Get unmatched Daraja payment events
+ * Calculate match confidence score
+ *
+ * Factors:
+ * - Amount match (exact or within tolerance)
+ * - Timestamp proximity
+ * - Phone number match
  */
-async function getUnmatchedDarajaEvents(): Promise<UnmatchedDarajaEvent[]> {
-  try {
-    const results = await db
-      .selectFrom('merchant_payment_events' as any)
-      .selectAll()
-      .where('status', '=', 'unmatched')
-      .where('event_type', '=', 'stk_callback')
-      .where(
-        'created_at',
-        '>=',
-        new Date(Date.now() - 24 * 60 * 60 * 1000) // Last 24 hours
-      )
-      .execute();
-
-    return results.map((row: any) => ({
-      eventId: row.event_id,
-      tenantId: row.tenant_id,
-      phoneNumber: row.phone_number || '',
-      amount: row.amount.toString(),
-      reference: row.reference || '',
-      receivedAt: new Date(row.received_at),
-      metadata: row.metadata ? JSON.parse(row.metadata) : {},
-    }));
-  } catch (error) {
-    logger.error('Failed to fetch unmatched Daraja events', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
-  }
-}
-
-/**
- * Normalize phone number for comparison
- */
-function normalizePhone(phone: string): string {
-  return phone
-    .replace(/\D/g, '') // Remove non-digits
-    .slice(-9); // Last 9 digits (handles various formats)
-}
-
-/**
- * Calculate match confidence between sale and Daraja event
- */
-function calculateMatchConfidence(
-  sale: PendingMpesaSale,
-  event: UnmatchedDarajaEvent
-): MatchResult | null {
-  // Must be from same tenant
-  if (sale.tenantId !== event.tenantId) {
-    return null;
-  }
-
+function calculateConfidence(
+  payment: MerchantPayment,
+  sale: PendingSale
+): number {
   let confidence = 0;
-  const reasons: string[] = [];
 
-  // Amount match (exact)
-  const saleAmount = parseFloat(sale.amount);
-  const eventAmount = parseFloat(event.amount);
-  if (Math.abs(saleAmount - eventAmount) < 0.01) {
-    confidence += 50;
-    reasons.push('amount-exact');
-  } else if (Math.abs(saleAmount - eventAmount) < 1) {
-    confidence += 20; // Within 1 unit
-    reasons.push('amount-close');
-  } else {
-    return null; // Fail on significant amount mismatch
-  }
-
-  // Phone number match
-  const salePhone = normalizePhone(sale.phoneNumber);
-  const eventPhone = normalizePhone(event.phoneNumber);
-  if (salePhone === eventPhone) {
-    confidence += 30;
-    reasons.push('phone-match');
-  } else if (salePhone && eventPhone && salePhone.endsWith(eventPhone.slice(-6))) {
-    confidence += 15;
-    reasons.push('phone-partial');
-  }
-
-  // Timestamp proximity (within 30 minutes)
-  const timeDiffMs = Math.abs(
-    sale.createdAt.getTime() - event.receivedAt.getTime()
+  // Amount matching (50% of score)
+  const amountDiff = Math.abs(
+    parseFloat(payment.amount) - parseFloat(sale.amount)
   );
-  const timeDiffMins = timeDiffMs / (1000 * 60);
+  const maxAmountTolerance = 5; // 5 KES tolerance for fees
 
-  if (timeDiffMins <= 5) {
-    confidence += 20;
-    reasons.push('timestamp-exact');
-  } else if (timeDiffMins <= 15) {
-    confidence += 10;
-    reasons.push('timestamp-close');
-  } else if (timeDiffMins <= 30) {
-    confidence += 5;
-    reasons.push('timestamp-window');
-  } else {
-    confidence = 0; // Outside acceptable window
+  if (amountDiff === 0) {
+    confidence += 50; // Exact match
+  } else if (amountDiff <= maxAmountTolerance) {
+    confidence += 40; // Within tolerance
+  } else if (amountDiff <= 50) {
+    confidence += 20; // Likely match but verify
   }
 
-  if (confidence < 85) {
-    return null; // Below threshold
+  // Timestamp proximity (30% of score)
+  const timeDiffMs = Math.abs(
+    payment.received_at.getTime() - sale.created_at.getTime()
+  );
+  const maxTimeDiff = 5 * 60 * 1000; // 5 minutes
+
+  if (timeDiffMs <= 60000) {
+    confidence += 30; // Within 1 minute
+  } else if (timeDiffMs <= maxTimeDiff) {
+    confidence += 20; // Within 5 minutes
+  } else if (timeDiffMs <= 15 * 60 * 1000) {
+    confidence += 10; // Within 15 minutes
   }
 
-  return {
-    saleTxnId: sale.transactionId,
-    darajaEventId: event.eventId,
-    confidence,
-    matchReason: reasons.join(','),
-  };
+  // Phone number match (20% of score) - would require customer data
+  // Placeholder for future enhancement
+  confidence += 0;
+
+  return confidence;
 }
 
 /**
- * Find best matches between sales and events
+ * Match payments and sales
  */
-function findBestMatches(
-  sales: PendingMpesaSale[],
-  events: UnmatchedDarajaEvent[]
-): MatchResult[] {
-  const matches: MatchResult[] = [];
-  const usedSales = new Set<string>();
-  const usedEvents = new Set<string>();
+async function matchPaymentsToSales(
+  tenantId: string
+): Promise<MatchResult[]> {
+  try {
+    const payments = await getUnmatchedMerchantPayments(tenantId);
+    const sales = await getUnmatchedMPESASales(tenantId);
 
-  // Sort by confidence desc
-  const candidates: Array<MatchResult & { sale: PendingMpesaSale; event: UnmatchedDarajaEvent }> = [];
+    const matches: MatchResult[] = [];
 
-  for (const sale of sales) {
-    for (const event of events) {
-      const match = calculateMatchConfidence(sale, event);
-      if (match) {
-        candidates.push({ ...match, sale, event });
+    for (const payment of payments) {
+      let bestMatch: PendingSale | null = null;
+      let bestConfidence = 0;
+
+      // Find best matching sale
+      for (const sale of sales) {
+        const confidence = calculateConfidence(payment, sale);
+
+        // Consider it a match if confidence >= 60%
+        if (confidence >= 60 && confidence > bestConfidence) {
+          bestMatch = sale;
+          bestConfidence = confidence;
+        }
+      }
+
+      if (bestMatch) {
+        matches.push({
+          merchant_payment_id: payment.payment_id,
+          sale_allocation_id: bestMatch.allocation_id,
+          confidence: bestConfidence,
+          matched_at: new Date(),
+        });
+
+        // Remove matched sale from pool to avoid duplicate matches
+        sales.splice(sales.indexOf(bestMatch), 1);
+
+        logger.info('Payment matched to sale', {
+          tenantId,
+          paymentId: payment.payment_id,
+          saleId: bestMatch.sale_id,
+          confidence: bestConfidence,
+        });
       }
     }
-  }
 
-  candidates.sort((a, b) => b.confidence - a.confidence);
-
-  // Greedy matching (each sale/event used only once)
-  for (const candidate of candidates) {
-    if (
-      !usedSales.has(candidate.saleTxnId) &&
-      !usedEvents.has(candidate.darajaEventId)
-    ) {
-      matches.push(candidate);
-      usedSales.add(candidate.saleTxnId);
-      usedEvents.add(candidate.darajaEventId);
-    }
-  }
-
-  return matches;
-}
-
-/**
- * Store match in database
- */
-async function storeMatch(
-  match: MatchResult,
-  confidence: number
-): Promise<void> {
-  try {
-    const status = confidence >= 95 ? 'auto_matched' : 'pending_review';
-
-    await db
-      .insertInto('merchant_payment_matches' as any)
-      .values({
-        sale_transaction_id: match.saleTxnId,
-        daraja_event_id: match.darajaEventId,
-        confidence_score: confidence,
-        match_reason: match.matchReason,
-        status,
-        created_at: new Date(),
-      })
-      .execute();
-
-    // Update sale transaction status if auto-matched
-    if (status === 'auto_matched') {
-      await db
-        .updateTable('sales_transactions' as any)
-        .set({
-          payment_status: 'COMPLETED_VERIFIED',
-          merchant_payment_event_id: match.darajaEventId,
-        })
-        .where('transaction_id', '=', match.saleTxnId)
-        .execute();
-
-      logger.info('Payment auto-matched and verified', {
-        saleTxnId: match.saleTxnId,
-        confidence: confidence,
-      });
-    }
+    return matches;
   } catch (error) {
-    logger.error('Failed to store match', {
-      saleTxnId: match.saleTxnId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error('Failed to match payments to sales', { error });
     throw error;
   }
 }
 
 /**
- * Create attention card for manual review matches
+ * Record matches in database
  */
-async function createManualReviewCard(
+async function recordMatches(
   tenantId: string,
-  matchCount: number
+  matches: MatchResult[]
 ): Promise<void> {
-  try {
-    await db
-      .insertInto('attention_cards' as any)
-      .values({
-        tenant_id: tenantId,
-        card_type: 'payment_reconciliation_pending',
-        title: 'Manual Payment Reconciliation Required',
-        description: `${matchCount} payments require manual review to complete matching with your sales.`,
-        severity: 'medium',
-        status: 'active',
-        action_url: '/merchant-payments?filter=pending_review',
-        created_at: new Date(),
-      })
-      .execute();
-  } catch (error) {
-    logger.error('Failed to create attention card', {
-      tenantId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+  for (const match of matches) {
+    try {
+      // Update merchant_payment status
+      await db
+        .updateTable('merchant_payments')
+        .set({
+          matched_at: match.matched_at,
+          status: match.confidence >= 90 ? 'MATCHED' : 'REVIEW_REQUIRED',
+        })
+        .where('payment_id', '=', match.merchant_payment_id)
+        .execute();
+
+      // Link allocation to payment
+      await db
+        .updateTable('sale_payment_allocations')
+        .set({
+          merchant_payment_id: match.merchant_payment_id,
+        })
+        .where('allocation_id', '=', match.sale_allocation_id)
+        .execute();
+
+      // Create match record for audit
+      await db
+        .insertInto('payment_matches')
+        .values({
+          match_id: uuidv4(),
+          tenant_id: tenantId,
+          merchant_payment_id: match.merchant_payment_id,
+          sale_allocation_id: match.sale_allocation_id,
+          confidence_score: match.confidence.toString(),
+          matched_at: match.matched_at,
+          created_at: new Date(),
+        })
+        .execute();
+
+      logger.debug('Match recorded', {
+        tenantId,
+        matchId: match.merchant_payment_id,
+        confidence: match.confidence,
+      });
+    } catch (error) {
+      logger.error('Failed to record match', {
+        tenantId,
+        error,
+      });
+    }
   }
 }
 
@@ -330,77 +268,43 @@ async function createManualReviewCard(
  */
 async function processMerchantReconciliation(job: Job): Promise<void> {
   try {
-    logger.info('Starting merchant reconciliation job', {
-      jobId: job.id,
-    });
+    logger.info('Starting merchant reconciliation job', { jobId: job.id });
 
-    // Get pending sales and unmatched events
-    const pendingSales = await getPendingMpesaSales();
-    const unmatchedEvents = await getUnmatchedDarajaEvents();
+    // Get all active tenants
+    const tenants = await db
+      .selectFrom('businesses')
+      .select('tenant_id')
+      .where('is_active', '=', true)
+      .execute();
 
-    logger.info('Reconciliation candidates found', {
-      pendingSalesCount: pendingSales.length,
-      unmatchedEventsCount: unmatchedEvents.length,
-    });
+    let totalMatches = 0;
+    let totalHighConfidence = 0;
 
-    if (pendingSales.length === 0 || unmatchedEvents.length === 0) {
-      logger.info('No candidates for reconciliation');
-      return;
-    }
-
-    // Find matches
-    const matches = findBestMatches(pendingSales, unmatchedEvents);
-
-    logger.info('Matches found', {
-      matchCount: matches.length,
-    });
-
-    // Group matches by tenant and confidence level
-    const matchesByTenant: Record<
-      string,
-      { autoMatched: MatchResult[]; manualReview: MatchResult[] }
-    > = {};
-
-    for (const match of matches) {
-      const sale = pendingSales.find((s) => s.transactionId === match.saleTxnId);
-      if (!sale) continue;
-
-      if (!matchesByTenant[sale.tenantId]) {
-        matchesByTenant[sale.tenantId] = {
-          autoMatched: [],
-          manualReview: [],
-        };
-      }
-
-      if (match.confidence >= 95) {
-        matchesByTenant[sale.tenantId].autoMatched.push(match);
-      } else {
-        matchesByTenant[sale.tenantId].manualReview.push(match);
-      }
-    }
-
-    // Process and store matches
-    for (const match of matches) {
+    for (const tenant of tenants) {
       try {
-        await storeMatch(match, match.confidence);
+        logger.info('Reconciling merchant payments for tenant', {
+          tenantId: tenant.tenant_id,
+        });
+
+        const matches = await matchPaymentsToSales(tenant.tenant_id);
+        await recordMatches(tenant.tenant_id, matches);
+
+        totalMatches += matches.length;
+        totalHighConfidence += matches.filter(
+          (m) => m.confidence >= 90
+        ).length;
       } catch (error) {
-        logger.error('Failed to process match', {
-          match,
+        logger.error('Failed to reconcile tenant payments', {
+          tenantId: tenant.tenant_id,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    // Create attention cards for manual review matches
-    for (const [tenantId, tenantMatches] of Object.entries(matchesByTenant)) {
-      if (tenantMatches.manualReview.length > 0) {
-        await createManualReviewCard(tenantId, tenantMatches.manualReview.length);
-      }
-    }
-
     logger.info('Merchant reconciliation job completed', {
       jobId: job.id,
-      matchesProcessed: matches.length,
+      totalMatches,
+      highConfidence: totalHighConfidence,
     });
   } catch (error) {
     logger.error('Merchant reconciliation job failed', {
@@ -418,21 +322,19 @@ export const merchantReconciliationWorker = new Worker(
   'buzzna:merchant-reconciliation',
   processMerchantReconciliation,
   {
-    connection: redis,
+    connection: queueConnectionConfig,
     concurrency: 1,
     settings: {
-      lockDuration: 60000,
-      lockRenewTime: 30000,
-      maxStalledCount: 3,
-      stalledInterval: 10000,
+      lockDuration: 120000,
+      lockRenewTime: 60000,
+      maxStalledCount: 2,
+      stalledInterval: 30000,
     },
   }
 );
 
 merchantReconciliationWorker.on('error', (error) => {
-  logger.error('Merchant reconciliation worker error', {
-    error: error instanceof Error ? error.message : String(error),
-  });
+  logger.error('Merchant reconciliation worker error', { error });
 });
 
 export default merchantReconciliationWorker;
