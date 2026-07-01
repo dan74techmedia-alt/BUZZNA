@@ -1,138 +1,486 @@
 /**
- * @file auth.controller.ts
- * @description HTTP Controller for the Authentication & Identity Domain.
- * @author Daniel Githinji (Dantyz) - Systems Architect
- * * Handles tenant registration, JWT issuance, and the compilation of the 
- * * offline sync snapshot required for the PWA terminal initialization.
+ * ============================================================================
+ * BUZZNA D74 - Authentication Controller (HTTP Request Handlers)
+ * ============================================================================
+ *
+ * PURPOSE:
+ * - Handle HTTP requests for business registration, login, token refresh, logout
+ * - Compile and return offline sync snapshots on successful authentication
+ * - Implement rate limiting for brute-force protection
+ * - Validate request payloads against Zod schemas
+ * - Extract client IP and user-agent for audit trails
+ *
+ * MIDDLEWARE DEPENDENCIES (must be applied in order):
+ * 1. express.json() - Parse JSON request body
+ * 2. authRateLimiter - Rate limit: 5 requests/minute
+ * 3. validateRequest(schema) - Zod payload validation
+ * 4. errorHandler - Catch and format errors
+ *
+ * ROUTES:
+ * POST /api/v1/auth/register       - Register new business tenant
+ * POST /api/v1/auth/login          - Authenticate user and return tokens + snapshot
+ * POST /api/v1/auth/refresh        - Rotate refresh token
+ * POST /api/v1/auth/logout         - Logout (optional, mainly for audit)
+ *
+ * ============================================================================
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { PoolClient } from 'pg';
+import { authService, LoginInput, RegisterBusinessInput } from './auth.service';
+import { authenticateTenant, requirePermission } from '../../common/middleware/auth.middleware';
+import { authRateLimiter } from '../../common/middleware/rate-limit.middleware';
+import { validateRequest } from '../../common/middleware/validation.middleware';
+import { AppError } from '../../common/errors/AppError';
 import { logger } from '../../common/logging/logger';
-import { dbPool, withTenantTransaction } from '../../index';
 
-export const authRouter = Router();
+const authRouter = Router();
 
-// ============================================================================
-// 1. ZOD COMPILE-TIME SCHEMAS (Validation Layer)
-// ============================================================================
-const loginSchema = z.object({
-  username: z.string().min(3, "Username must be at least 3 characters."),
-  password: z.string().min(6, "Password must be at least 6 characters.")
+/**
+ * ============================================================================
+ * ZOD VALIDATION SCHEMAS
+ * ============================================================================
+ */
+
+/**
+ * Business Registration Schema
+ */
+const registerBusinessSchema = z.object({
+  body: z.object({
+    legalName: z
+      .string()
+      .min(2, 'Legal business name must be at least 2 characters')
+      .max(200, 'Legal business name cannot exceed 200 characters'),
+
+    tradeName: z
+      .string()
+      .max(200, 'Trade name cannot exceed 200 characters')
+      .optional(),
+
+    businessType: z.enum(
+      ['RETAIL', 'BUTCHERY', 'MITUMBA', 'HARDWARE', 'AGROVET', 'CYBER', 'WHOLESALE'],
+      {
+        errorMap: () => ({
+          message: 'Business type must be one of: RETAIL, BUTCHERY, MITUMBA, HARDWARE, AGROVET, CYBER, WHOLESALE',
+        }),
+      }
+    ),
+
+    ownerFullName: z
+      .string()
+      .min(2, 'Owner name must be at least 2 characters')
+      .max(150, 'Owner name cannot exceed 150 characters'),
+
+    email: z
+      .string()
+      .email('Must provide a valid email address')
+      .max(150, 'Email cannot exceed 150 characters'),
+
+    phone: z
+      .string()
+      .regex(/^\+?[1-9]\d{1,14}$/, 'Phone must be a valid E.164 format (e.g., +254712345678)'),
+
+    username: z
+      .string()
+      .min(4, 'Username must be at least 4 characters')
+      .max(80, 'Username cannot exceed 80 characters')
+      .regex(/^[a-zA-Z0-9_-]+$/, 'Username can only contain alphanumeric, underscore, and hyphen characters'),
+
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+      .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
+      .regex(/[0-9]/, 'Password must contain at least one numeric digit')
+      .regex(/[!@#$%^&*]/, 'Password must contain at least one special character (!@#$%^&*)'),
+  }),
+  query: z.object({}).strict(),
+  params: z.object({}).strict(),
 });
 
-// ============================================================================
-// 2. ROUTE HANDLERS
-// ============================================================================
+/**
+ * Login Schema
+ */
+const loginSchema = z.object({
+  body: z.object({
+    username: z
+      .string()
+      .min(4, 'Username must be at least 4 characters')
+      .max(80, 'Username cannot exceed 80 characters'),
+
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters'),
+  }),
+  query: z.object({}).strict(),
+  params: z.object({}).strict(),
+});
+
+/**
+ * Refresh Token Schema
+ */
+const refreshTokenSchema = z.object({
+  body: z.object({
+    refreshToken: z
+      .string()
+      .min(10, 'Refresh token is invalid'),
+  }),
+  query: z.object({}).strict(),
+  params: z.object({}).strict(),
+});
+
+/**
+ * ============================================================================
+ * ROUTE HANDLERS
+ * ============================================================================
+ */
+
+/**
+ * POST /api/v1/auth/register
+ *
+ * DESCRIPTION:
+ * - Create a new business tenant and initialize root owner user
+ * - Automatically activate 14-day trial period
+ * - Seed default roles (OWNER, MANAGER, CASHIER, ACCOUNTANT)
+ * - Return initial JWT tokens
+ *
+ * REQUEST BODY:
+ * {
+ *   "legalName": "John's Retail Shop",
+ *   "tradeName": "John's Shop",
+ *   "businessType": "RETAIL",
+ *   "ownerFullName": "John Doe",
+ *   "email": "john@example.com",
+ *   "phone": "+254712345678",
+ *   "username": "john_owner",
+ *   "password": "SecurePass123!"
+ * }
+ *
+ * SUCCESS RESPONSE (200):
+ * {
+ *   "status": "success",
+ *   "tenantId": "550e8400-e29b-41d4-a716-446655440000",
+ *   "tokens": {
+ *     "accessToken": "eyJhbGc...",
+ *     "refreshToken": "eyJhbGc...",
+ *     "expiresIn": 28800
+ *   },
+ *   "message": "Business registration successful. Trial period started for 14 days."
+ * }
+ *
+ * ERROR RESPONSES:
+ * - 400: Validation failure (invalid email, weak password, etc.)
+ * - 409: Duplicate email or username
+ * - 500: Database or system error
+ */
+authRouter.post(
+  '/register',
+  authRateLimiter,
+  validateRequest(registerBusinessSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const input: RegisterBusinessInput = {
+        legalName: req.body.legalName,
+        tradeName: req.body.tradeName,
+        businessType: req.body.businessType,
+        ownerFullName: req.body.ownerFullName,
+        email: req.body.email,
+        phone: req.body.phone,
+        username: req.body.username,
+        password: req.body.password,
+      };
+
+      logger.info('Business registration request received', {
+        email: input.email,
+        businessType: input.businessType,
+      });
+
+      // Call auth service to create tenant
+      const result = await authService.registerBusiness(input);
+
+      logger.info('Business registered successfully', {
+        tenantId: result.tenantId,
+        email: input.email,
+      });
+
+      res.status(201).json({
+        status: 'success',
+        message: 'Business registration successful. Trial period activated for 14 days.',
+        tenantId: result.tenantId,
+        tokens: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresIn: 28800, // 8 hours in seconds
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 /**
  * POST /api/v1/auth/login
- * @purpose Authenticate user, return JWT tokens, and generate the offline sync snapshot.
+ *
+ * DESCRIPTION:
+ * - Authenticate user with username and password
+ * - Verify account status and license (TRIAL_ACTIVE, SUSPENDED_NON_PAYMENT, etc.)
+ * - Return JWT tokens (access + refresh)
+ * - Compile offline sync snapshot (products cache + permissions)
+ * - Record login attempt in audit history
+ * - Enforce account lockout after 5 failed attempts
+ *
+ * REQUEST BODY:
+ * {
+ *   "username": "john_owner",
+ *   "password": "SecurePass123!"
+ * }
+ *
+ * SUCCESS RESPONSE (200):
+ * {
+ *   "status": "success",
+ *   "tokens": {
+ *     "accessToken": "eyJhbGc...",
+ *     "refreshToken": "eyJhbGc...",
+ *     "expiresIn": 28800
+ *   },
+ *   "profile": {
+ *     "userId": "550e8400-e29b-41d4-a716-446655440000",
+ *     "username": "john_owner",
+ *     "roleId": "550e8400-e29b-41d4-a716-446655440001",
+ *     "roleName": "OWNER"
+ *   },
+ *   "offlineSnapshot": {
+ *     "licenseStatus": "TRIAL_ACTIVE",
+ *     "businessName": "John's Shop",
+ *     "userId": "550e8400-e29b-41d4-a716-446655440000",
+ *     "roleId": "550e8400-e29b-41d4-a716-446655440001",
+ *     "roleName": "OWNER",
+ *     "permissions": ["dashboard.view", "catalog.manage", ...],
+ *     "catalogCache": [
+ *       {
+ *         "product_id": "...",
+ *         "barcode": "123456789",
+ *         "product_name": "Widget",
+ *         "retail_price": "1000.00",
+ *         "current_quantity": "50.000",
+ *         "cost_floor": "500.00"
+ *       },
+ *       ...
+ *     ],
+ *     "businessSettings": {
+ *       "allow_negative_stock": true,
+ *       "enable_customer_credit": true,
+ *       "low_stock_threshold": 10
+ *     }
+ *   }
+ * }
+ *
+ * ERROR RESPONSES:
+ * - 400: Validation failure
+ * - 401: Invalid credentials or expired refresh token
+ * - 403: Account locked, account inactive, or subscription suspended
+ * - 429: Too many login attempts (rate limited)
+ * - 500: Database error
  */
-authRouter.post('/login', async (req: Request, res: Response, next: NextFunction) => {
-  let client: PoolClient | null = null;
-
-  try {
-    const { username, password } = loginSchema.parse(req.body);
-    client = await dbPool.connect();
-
-    logger.info(`[Auth] Attempting login for user: ${username}`);
-
-    // 1. Fetch User & Tenant Status
-    const userResult = await client.query(`
-      SELECT 
-        u.user_id, u.tenant_id, u.role_id, u.username, u.password_hash, u.is_active,
-        b.license_status, b.trade_name
-      FROM users u
-      JOIN businesses b ON u.tenant_id = b.tenant_id
-      WHERE u.username = $1 AND u.is_active = true
-    `, [username]);
-
-    if (userResult.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials or inactive account.' });
-    }
-
-    const user = userResult.rows[0];
-
-    // 2. Verify Argon2id / Bcrypt string
-    const passwordMatch = await bcrypt.compare(password, user.password_hash);
-    if (!passwordMatch) {
-      return res.status(401).json({ error: 'Invalid credentials.' });
-    }
-
-    // 3. Generate Layer 1 JWT Tokens
-    const accessToken = jwt.sign(
-      {
-        tenant_id: user.tenant_id,
-        user_id: user.user_id,
-        role_id: user.role_id,
-        username: user.username
-      },
-      process.env.JWT_ACCESS_SECRET!,
-      { expiresIn: '8h' } // Short-lived access token
-    );
-
-    const refreshToken = jwt.sign(
-      { user_id: user.user_id },
-      process.env.JWT_REFRESH_SECRET!,
-      { expiresIn: '7d' } // Long-lived secure refresh token
-    );
-
-    // 4. Compile Offline Sync Snapshot (Products LRU Cache & License State)
-    // Runs inside the Layer 2 isolated transaction wrapper to prevent tenant data leakage
-    const snapshot = await withTenantTransaction(user.tenant_id, async (txClient) => {
-      // Fetch top fastest-moving inventory items for the LRU cache (Top 80%)
-      const catalogResult = await txClient.query(`
-        SELECT product_id, barcode, name, retail_price, current_quantity 
-        FROM products 
-        WHERE is_active = true 
-        LIMIT 10000
-      `);
-
-      return {
-        licenseStatus: user.license_status,
-        businessName: user.trade_name,
-        catalogCache: catalogResult.rows
+authRouter.post(
+  '/login',
+  authRateLimiter,
+  validateRequest(loginSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const input: LoginInput = {
+        username: req.body.username,
+        password: req.body.password,
       };
-    });
 
-    logger.info(`[Auth] Login successful. Issuing snapshot for tenant: ${user.tenant_id}`);
+      // Extract client context for audit trail
+      const ipAddress = req.ip || req.socket.remoteAddress;
+      const userAgent = req.get('user-agent');
 
-    // 5. Response
-    res.status(200).json({
-      status: 'success',
-      tokens: {
-        accessToken,
-        refreshToken
-      },
-      profile: {
-        userId: user.user_id,
-        username: user.username,
-        roleId: user.role_id
-      },
-      offlineSnapshot: snapshot
-    });
+      logger.info('Login attempt', {
+        username: input.username,
+        ip: ipAddress,
+      });
 
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ status: 'error', issues: error.errors });
+      // Call auth service to authenticate
+      const response = await authService.login(input, ipAddress, userAgent);
+
+      logger.info('Login successful', {
+        username: input.username,
+        userId: response.profile.userId,
+      });
+
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
     }
-    logger.error(`[Auth] System error during login execution:`,);
-    next(error);
-  } finally {
-    if (client) client.release();
   }
-});
+);
 
 /**
- * POST /api/v1/auth/register-business
- * @purpose Create tenant, root owner user, and start initial 14-day trial.
+ * POST /api/v1/auth/refresh
+ *
+ * DESCRIPTION:
+ * - Exchange a refresh token for new access + refresh tokens
+ * - Verify user is still active and tenant is not suspended
+ * - Implement token rotation strategy (each refresh returns new refresh token)
+ * - This allows seamless session continuation without re-login
+ *
+ * REQUEST BODY:
+ * {
+ *   "refreshToken": "eyJhbGc..."
+ * }
+ *
+ * SUCCESS RESPONSE (200):
+ * {
+ *   "status": "success",
+ *   "tokens": {
+ *     "accessToken": "eyJhbGc...",
+ *     "refreshToken": "eyJhbGc...",
+ *     "expiresIn": 28800
+ *   }
+ * }
+ *
+ * ERROR RESPONSES:
+ * - 400: Validation failure
+ * - 401: Refresh token expired or invalid
+ * - 403: User or tenant not found / inactive
+ * - 500: System error
  */
-authRouter.post('/register-business', async (req: Request, res: Response, next: NextFunction) => {
-  // Stubbed for Phase 1 deployment. 
-  // Focus remains on bridging the Login -> Offline Sync path first.
-  res.status(501).json({ message: "Tenant registration sequence pending implementation." });
-});
+authRouter.post(
+  '/refresh',
+  validateRequest(refreshTokenSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { refreshToken } = req.body;
+
+      logger.info('Token refresh request received');
+
+      // Call auth service to refresh tokens
+      const result = await authService.refreshAccessToken(refreshToken);
+
+      logger.info('Token refresh successful');
+
+      res.status(200).json({
+        status: 'success',
+        tokens: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresIn: result.expiresIn,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/auth/logout
+ *
+ * DESCRIPTION:
+ * - Log out the authenticated user
+ * - Record logout timestamp in audit history
+ * - This is primarily for audit trail purposes (tokens will still be valid until expiry)
+ * - Frontend should discard tokens on logout
+ *
+ * AUTHENTICATION: Required (Bearer JWT in Authorization header)
+ *
+ * SUCCESS RESPONSE (200):
+ * {
+ *   "status": "success",
+ *   "message": "Logout successful"
+ * }
+ *
+ * ERROR RESPONSES:
+ * - 401: Missing or invalid authentication token
+ * - 500: Database error during logout
+ */
+authRouter.post(
+  '/logout',
+  authenticateTenant,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      // Extract user context from authenticated request
+      if (!req.user) {
+        throw new AppError('User context not available', 401);
+      }
+
+      logger.info('Logout request received', {
+        userId: req.user.userId,
+        tenantId: req.user.tenantId,
+      });
+
+      // Call auth service to record logout
+      await authService.logout(req.user.userId, req.user.tenantId);
+
+      logger.info('User logged out successfully', {
+        userId: req.user.userId,
+      });
+
+      res.status(200).json({
+        status: 'success',
+        message: 'Logout successful. Discard tokens on the client.',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/auth/me
+ *
+ * DESCRIPTION:
+ * - Fetch current authenticated user's profile
+ * - Verify JWT is still valid
+ * - Return user metadata (userId, username, roleId, permissions)
+ * - Useful for PWA terminal to confirm session validity on startup
+ *
+ * AUTHENTICATION: Required (Bearer JWT in Authorization header)
+ *
+ * SUCCESS RESPONSE (200):
+ * {
+ *   "status": "success",
+ *   "profile": {
+ *     "userId": "550e8400-e29b-41d4-a716-446655440000",
+ *     "username": "john_owner",
+ *     "tenantId": "550e8400-e29b-41d4-a716-446655440001",
+ *     "roleId": "550e8400-e29b-41d4-a716-446655440002",
+ *     "roleName": "OWNER",
+ *     "permissions": ["dashboard.view", "catalog.manage", ...]
+ *   }
+ * }
+ *
+ * ERROR RESPONSES:
+ * - 401: Missing or invalid authentication token
+ * - 500: Database error
+ */
+authRouter.get(
+  '/me',
+  authenticateTenant,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!req.user) {
+        throw new AppError('User context not available', 401);
+      }
+
+      res.status(200).json({
+        status: 'success',
+        profile: {
+          userId: req.user.userId,
+          username: req.user.username,
+          tenantId: req.user.tenantId,
+          roleId: req.user.roleId,
+          roleName: req.user.roleName,
+          permissions: req.user.permissions,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+export default authRouter;

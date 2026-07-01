@@ -8,7 +8,7 @@ import {
   getSubscriptionPlans,
   getBillingHistory,
   getCurrentSubscription,
-} from '../modules/billing/billing.controller';
+} from '../modules/billing/billing.controllers';
 import { paystackRouter } from '../modules/billing/paystack.controller';
 
 /**

@@ -9,4 +9,4 @@ export const stkPushSchema = z.object({
   transactionDesc: z.string().min(3, 'Description required'),
 });
 
-export type StkPushInput = z.infer<typeof stkPushSchema>;
+export type StkPushInput = z.infer<typeof stkPushSchema>; 
