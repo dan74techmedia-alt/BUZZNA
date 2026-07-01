@@ -1,27 +1,59 @@
+// apps/api/src/routes/auth.routes.ts
+
 import { Router } from 'express';
-import * as authController from '../modules/auth/auth.controller';
-import { requireAuth } from '../common/middleware/auth.middleware';
+import { AuthController } from '../modules/auth/auth.controller';
+import { validateRequest } from '../common/middleware/validation.middleware';
+import { rateLimitMiddleware } from '../common/middleware/rate-limit.middleware';
+import { 
+  registerBusinessSchema, 
+  loginSchema, 
+  refreshTokenSchema 
+} from '../modules/auth/auth.schema';
 
 const router = Router();
+const authController = new AuthController();
 
 /**
- * Public Routes
+ * Section 10: API Rate Limiting
+ * Strict token-bucket algorithms on /auth (5 req/min) to prevent brute force attacks.
  */
-// Create tenant, root owner user, and start initial 14-day trial
-router.post('/register-business', authController.registerBusiness);
-
-// Authenticate user, returns JWT tokens and offline sync snapshot
-router.post('/login', authController.login);
-
-// Rotate short-lived access token using long-lived secure refresh token
-router.post('/refresh', authController.refreshToken);
+const authRateLimiter = rateLimitMiddleware({
+  windowMs: 60 * 1000, 
+  max: 5,
+  message: 'Too many authentication attempts, please try again after a minute.'
+});
 
 /**
- * Protected Routes
+ * POST /api/v1/auth/register-business
+ * Creates tenant, root owner user, and initiates 14-day trial.
  */
-// Fetch active business profile and SaaS entitlement snapshot parameters
-// Note: Mapped to /me but frequently mounted on /api/v1/business/me via index.ts or here.
-router.get('/me', requireAuth, authController.getMe);
-router.post('/logout', requireAuth, authController.logout);
+router.post(
+  '/register-business',
+  authRateLimiter,
+  validateRequest(registerBusinessSchema),
+  authController.registerBusiness
+);
+
+/**
+ * POST /api/v1/auth/login
+ * Authenticate user and return sync snapshot.
+ */
+router.post(
+  '/login',
+  authRateLimiter,
+  validateRequest(loginSchema),
+  authController.login
+);
+
+/**
+ * POST /api/v1/auth/refresh
+ * Rotate short-lived access token using long-lived secure refresh token.
+ */
+router.post(
+  '/refresh',
+  authRateLimiter,
+  validateRequest(refreshTokenSchema),
+  authController.refresh
+);
 
 export default router;

@@ -125,6 +125,7 @@ apps/
           sync.schema.ts ✅
           sync.service.ts ✅
         tenancy/
+          tenancy.controller.ts ✅
           tenancy.service.ts ✅
         till/
           till.controller.ts ✅
@@ -144,6 +145,7 @@ apps/
         sales.routes.ts ✅
         suppliers.routes.ts ✅
         sync.routes.ts ✅
+        tenancy.routes.ts ✅
         till.routes.ts ✅
       types/
         express.d.ts ✅
