@@ -120,7 +120,7 @@ authRouter.post('/login', async (req: Request, res: Response, next: NextFunction
     if (error instanceof z.ZodError) {
       return res.status(400).json({ status: 'error', issues: error.errors });
     }
-    logger.error(`[Auth] System error during login execution:`, { error });
+    logger.error(`[Auth] System error during login execution:`,);
     next(error);
   } finally {
     if (client) client.release();
