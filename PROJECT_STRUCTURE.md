@@ -162,6 +162,17 @@ apps/
     package.json ✅
     src/
       App.tsx ✅
+      components/
+        OfflineIndicator.tsx ✅
+        ProtectedRoute.tsx ✅
+      features/
+        auth/
+          authStorage.ts ✅
+      hooks/
+        useProducts.ts ✅
+        useSync.ts ✅
+      layouts/
+        PosLayout.tsx ✅
       main.tsx ✅
       offline/
         db.ts ✅
@@ -177,6 +188,8 @@ apps/
       providers/
         ThemeProvider.tsx ✅
       store/
+        auth.store.ts ✅
+        cart.store.ts ✅
         pos.store.ts ✅
     vite.config.ts ✅
 automation/
