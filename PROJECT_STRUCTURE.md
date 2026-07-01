@@ -151,6 +151,7 @@ apps/
         express.d.ts ✅
       workers/
         billing-reminders.worker.ts ✅
+        index.ts ✅
         merchant-reconciliation.worker.ts ✅
         projection-rebuild.worker.ts ✅
         report-exporter.worker.ts ✅
