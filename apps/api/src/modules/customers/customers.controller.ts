@@ -45,3 +45,7 @@ router.post('/:id/repayments', enforceLicense(['TRIAL_ACTIVE', 'FULLY_ACTIVATED'
 });
 
 export const CustomersController = router;
+
+export function getCustomerLedger(arg0: string, getCustomerLedger: any) {
+    throw new Error('Function not implemented.');
+}
