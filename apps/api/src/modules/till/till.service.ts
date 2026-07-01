@@ -1,83 +1,211 @@
 // apps/api/src/modules/till/till.service.ts
-import { db } from '../../config/database';
-import { OpenTillDTO, CloseTillDTO } from './till.schema';
+
+import { db, withTenant } from '../../config/database';
+import { logger } from '../../common/logging/logger';
+import { AppError } from '../../common/errors/AppError';
+import { Decimal } from 'decimal.js';
+
+interface OpenTillPayload {
+  openingFloat: string;
+}
+
+interface CloseTillPayload {
+  actualCashBalance: string;
+}
 
 export class TillService {
-  static async getActiveSession(tenantId: string, userId: string) {
-    const result = await db.query(
-      `SELECT till_session_id, cashier_user_id, status, opening_float, expected_cash_balance, opened_at
-       FROM till_sessions
-       WHERE tenant_id = $1 AND cashier_user_id = $2 AND status = 'OPEN';`,
-      [tenantId, userId]
-    );
-    return result.rows[0] || null;
-  }
+  /**
+   * Open till session (single active session per cashier)
+   */
+  static async openTill(
+    tenantId: string,
+    userId: string,
+    payload: OpenTillPayload
+  ): Promise<{ sessionId: string; openingFloat: string }> {
+    return await withTenant(tenantId, async (trx) => {
+      try {
+        // Check for existing open session
+        const existing = await trx
+          .selectFrom('till_sessions')
+          .selectAll()
+          .where('tenant_id', '=', tenantId)
+          .where('cashier_user_id', '=', userId)
+          .where('status', '=', 'OPEN')
+          .executeTakeFirst();
 
-  static async openSession(tenantId: string, userId: string, data: OpenTillDTO) {
-    const active = await this.getActiveSession(tenantId, userId);
-    if (active) {
-      throw new Error('An active till session is already running for this user terminal');
-    }
+        if (existing) {
+          throw new AppError('Cashier already has an open till session', 400);
+        }
 
-    const result = await db.query(
-      `INSERT INTO till_sessions (tenant_id, cashier_user_id, status, opening_float, expected_cash_balance)
-       VALUES ($1, $2, 'OPEN', $3, $3)
-       RETURNING till_session_id, status, opening_float, expected_cash_balance, opened_at;`,
-      [tenantId, userId, data.opening_float]
-    );
-    return result.rows[0];
+        const openingFloat = new Decimal(payload.openingFloat);
+
+        // Create till session
+        const result = await trx
+          .insertInto('till_sessions')
+          .values({
+            tenant_id: tenantId,
+            cashier_user_id: userId,
+            opening_float: openingFloat.toString(),
+            expected_cash_balance: openingFloat.toString(),
+            status: 'OPEN',
+            opened_at: new Date(),
+          })
+          .returning('session_id')
+          .executeTakeFirst();
+
+        if (!result) {
+          throw new Error('Failed to create till session');
+        }
+
+        logger.info('[TillService] Till opened', {
+          tenantId,
+          userId,
+          sessionId: result.session_id,
+          openingFloat: openingFloat.toString(),
+        });
+
+        return {
+          sessionId: result.session_id,
+          openingFloat: openingFloat.toString(),
+        };
+      } catch (error) {
+        logger.error('[TillService] Failed to open till', {
+          tenantId,
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error instanceof AppError ? error : new AppError('Failed to open till', 500);
+      }
+    });
   }
 
   /**
-   * Blind Till Handover implementation rule: Cashier registers physical content counts 
-   * without system revealing the expected values beforehand to secure integrity.
+   * Close till session with blind balance entry
+   * Blind Balance: Cashier enters actual cash without seeing expected balance
    */
-  static async closeSession(tenantId: string, sessionId: string, data: CloseTillDTO) {
-    const client = await db.getClient();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.current_tenant_id', $1, true);`, [tenantId]);
+  static async closeTill(
+    tenantId: string,
+    userId: string,
+    sessionId: string,
+    payload: CloseTillPayload
+  ): Promise<{ status: string; discrepancy: string; variance: string }> {
+    return await withTenant(tenantId, async (trx) => {
+      try {
+        // Get session
+        const session = await trx
+          .selectFrom('till_sessions')
+          .selectAll()
+          .where('tenant_id', '=', tenantId)
+          .where('session_id', '=', sessionId)
+          .where('cashier_user_id', '=', userId)
+          .executeTakeFirst();
 
-      const sessionCheck = await client.query(
-        `SELECT expected_cash_balance, status FROM till_sessions WHERE till_session_id = $1 AND tenant_id = $2 FOR UPDATE;`,
-        [sessionId, tenantId]
-      );
+        if (!session) {
+          throw new AppError('Till session not found', 404);
+        }
 
-      if (sessionCheck.rows.length === 0 || sessionCheck.rows[0].status !== 'OPEN') {
-        throw new Error('Till session does not exist or has already been completed');
+        if (session.status !== 'OPEN') {
+          throw new AppError('Till session is not open', 400);
+        }
+
+        const actualBalance = new Decimal(payload.actualCashBalance);
+        const expectedBalance = new Decimal(session.expected_cash_balance);
+        const variance = actualBalance.minus(expectedBalance);
+        const varianceLimit = new Decimal(100); // Configurable limit
+
+        // Check variance
+        let closingStatus = 'CLOSED';
+        if (variance.abs().greaterThan(varianceLimit)) {
+          closingStatus = 'REVIEW_REQUIRED';
+        }
+
+        // Close session
+        await trx
+          .updateTable('till_sessions')
+          .set({
+            actual_cash_balance: actualBalance.toString(),
+            expected_cash_balance: expectedBalance.toString(),
+            variance: variance.toString(),
+            status: closingStatus,
+            closed_at: new Date(),
+          })
+          .where('session_id', '=', sessionId)
+          .execute();
+
+        // If variance exceeds limit, create attention card
+        if (closingStatus === 'REVIEW_REQUIRED') {
+          await trx
+            .insertInto('attention_cards')
+            .values({
+              tenant_id: tenantId,
+              card_type: 'till_discrepancy',
+              title: 'Till Balance Discrepancy',
+              description: `Variance of ${variance.toString()} detected. Expected: ${expectedBalance.toString()}, Actual: ${actualBalance.toString()}`,
+              severity: 'high',
+              status: 'active',
+              metadata: JSON.stringify({
+                sessionId,
+                userId,
+                variance: variance.toString(),
+                expected: expectedBalance.toString(),
+                actual: actualBalance.toString(),
+              }),
+              created_at: new Date(),
+            })
+            .execute();
+        }
+
+        logger.info('[TillService] Till closed', {
+          tenantId,
+          userId,
+          sessionId,
+          status: closingStatus,
+          variance: variance.toString(),
+        });
+
+        return {
+          status: closingStatus,
+          discrepancy: variance.abs().toString(),
+          variance: variance.toString(),
+        };
+      } catch (error) {
+        logger.error('[TillService] Failed to close till', {
+          tenantId,
+          userId,
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error instanceof AppError ? error : new AppError('Failed to close till', 500);
       }
+    });
+  }
 
-      const expected = parseFloat(sessionCheck.rows[0].expected_cash_balance);
-      const discrepancy = data.actual_cash_balance - expected;
+  /**
+   * Get current till status
+   */
+  static async getTillStatus(
+    tenantId: string,
+    userId: string
+  ): Promise<any | null> {
+    return await withTenant(tenantId, async (trx) => {
+      try {
+        const session = await trx
+          .selectFrom('till_sessions')
+          .selectAll()
+          .where('tenant_id', '=', tenantId)
+          .where('cashier_user_id', '=', userId)
+          .where('status', '=', 'OPEN')
+          .executeTakeFirst();
 
-      const result = await client.query(
-        `UPDATE till_sessions
-         SET status = 'CLOSED', actual_cash_balance = $1, closed_at = NOW()
-         WHERE till_session_id = $2
-         RETURNING till_session_id, opening_float, expected_cash_balance, actual_cash_balance, closed_at;`,
-        [data.actual_cash_balance, sessionId]
-      );
-
-      // If a major discrepancies trace occurs, append an immutable security tracking log
-      if (Math.abs(discrepancy) > 0) {
-        await client.query(
-          `INSERT INTO security_events (tenant_id, event_type, severity, description)
-           VALUES ($1, 'TILL_DISCREPANCY', $2, $3);`,
-          [
-            tenantId,
-            Math.abs(discrepancy) > 500 ? 'HIGH' : 'LOW',
-            `Till session ${sessionId} completed with cash variance delta of: ${discrepancy}`
-          ]
-        );
+        return session || null;
+      } catch (error) {
+        logger.error('[TillService] Failed to get till status', {
+          tenantId,
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
       }
-
-      await client.query('COMMIT');
-      return { ...result.rows[0], discrepancy };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 }

@@ -89,7 +89,7 @@ apps/
           automation.schema.ts ✅
           automation.service.ts ✅
         billing/
-          billing.controller.ts ✅
+          billing.controllers.ts ✅
           billing.schema.ts ✅
           billing.service.ts ✅
           paystack.controller.ts ✅
