@@ -168,6 +168,12 @@ apps/
       features/
         auth/
           authStorage.ts ✅
+        pos/
+          CartTable.tsx ✅
+        sync/
+          ConflictResolutionDialog.tsx ✅
+          SyncQueue.tsx ✅
+          SyncStatus.tsx ✅
       hooks/
         useProducts.ts ✅
         useSync.ts ✅
@@ -179,7 +185,9 @@ apps/
         syncmanager.ts ✅
       pages/
         Billing.tsx ✅
+        Customers.tsx ✅
         Dashboard.tsx ✅
+        Expenses.tsx ✅
         Inventory.tsx ✅
         Login.tsx ✅
         MerchantPayments.tsx ✅
@@ -187,10 +195,19 @@ apps/
         TillManagement.tsx ✅
       providers/
         ThemeProvider.tsx ✅
+      router.tsx ✅
       store/
         auth.store.ts ✅
         cart.store.ts ✅
         pos.store.ts ✅
+      utils/
+        api.ts ✅
+        axios.ts ✅
+        constants.ts ✅
+        formatCurrency.ts ✅
+        formatDate.ts ✅
+        permissions.ts ✅
+        validators.ts ✅
     vite.config.ts ✅
 automation/
   project-intelligence.js ✅
