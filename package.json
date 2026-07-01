@@ -8,14 +8,15 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "dev": "turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "format": "prettier --write .",
     "clean": "turbo run clean",
-    "prepare": "husky"
+    "prepare": "husky",
+    "dev": "ts-node-dev apps/api/src/index.ts"
+  
   },
   "devDependencies": {
     "@types/node": "^24.0.13",

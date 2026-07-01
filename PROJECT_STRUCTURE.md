@@ -13,7 +13,6 @@ apps/
   api/
     package.json ✅
     src/
-      .gitkeep 🔴 Empty
       bootstrap/
         app.ts ✅
         load-env.ts ✅
@@ -35,6 +34,7 @@ apps/
         client.ts ✅
         migrations/
           schema.ts ✅
+      index.ts 🔴 Empty
       modules/
         .gitkeep 🔴 Empty
         analytics/
