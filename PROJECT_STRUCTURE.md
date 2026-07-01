@@ -47,11 +47,16 @@ apps/
         middleware/
           audit.middleware.ts ✅
           auth.middleware.ts ✅
+          cache.middleware.ts ✅
+          compression.middleware.ts ✅
+          idempotency.middleware.ts ✅
           license-lockdown.middleware.ts ✅
           rate-limit.middleware.ts ✅
           rbac.middleware.ts ✅
           request-id.middleware.ts ✅
+          tenant-transaction.middleware.ts ✅
           validation.middleware.ts ✅
+          webhook-verification.middleware.ts ✅
         tenant-context.ts ✅
       config/
         bullmq.ts ✅
@@ -59,6 +64,7 @@ apps/
         database.ts ✅
         env.ts ✅
         paystack.ts ✅
+        queues.ts ✅
         redis.ts ✅
       db/
         client.ts ✅
@@ -73,6 +79,7 @@ apps/
           analytics.service.ts ✅
         audit-security/
           audit.service.ts ✅
+          security.service.ts ✅
         auth/
           auth.controller.ts ✅
           auth.schema.ts ✅
@@ -82,6 +89,7 @@ apps/
           automation.schema.ts ✅
           automation.service.ts ✅
         billing/
+          billing.controller.ts ✅
           billing.schema.ts ✅
           billing.service.ts ✅
           paystack.controller.ts ✅
@@ -107,11 +115,18 @@ apps/
           daraja.service.ts ✅
           offlineSmsBridge.ts ✅
         notifications/
+          email.service.ts ✅
           notifications.controller.ts ✅
           notifications.schema.ts ✅
           notifications.service.ts ✅
+          push.service.ts ✅
+          sms.service.ts ✅
         rbac/
           rbac.service.ts ✅
+        reports/
+          csv.service.ts ✅
+          pdf.service.ts ✅
+          report.service.ts ✅
         sales/
           sales.controller.ts ✅
           sales.schema.ts ✅
@@ -150,11 +165,19 @@ apps/
       types/
         express.d.ts ✅
       workers/
+        analytics-refresh.worker.ts ✅
+        audit-pruning.worker.ts ✅
         billing-reminders.worker.ts ✅
+        cache-refresh.worker.ts ✅
+        customer-aging.worker.ts ✅
         index.ts ✅
+        license-expiry.worker.ts ✅
         merchant-reconciliation.worker.ts ✅
+        notification.worker.ts ✅
         projection-rebuild.worker.ts ✅
         report-exporter.worker.ts ✅
+        stale-stock.worker.ts ✅
+        sync-cleanup.worker.ts ✅
     tsconfig.json ✅
   web/
     .env ✅

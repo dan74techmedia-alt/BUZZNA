@@ -1,90 +1,103 @@
-import { Request, Response } from 'express';
-import { db } from '../../bootstrap/database';
-import { sql } from 'kysely';
+// apps/api/src/modules/merchant-payments/daraja.controller.ts
 
-export const handleDarajaCallback = async (req: Request, res: Response) => {
-    const { Body } = req.body;
+import { Router, Request, Response } from 'express';
+import { logger } from '../../common/logging/logger';
+import { AppError } from '../../common/errors/AppError';
+import { verifyTenantContext, getDbTransaction } from '../../common/middleware/tenant-transaction.middleware';
+import { darajaService } from './daraja.service';
+import { stkPushSchema } from './daraja.schema';
 
-    // Fast return to Safaricom to acknowledge receipt
-    res.status(200).json({ ResultCode: 0, ResultDesc: "Confirmation received successfully" });
+/**
+ * Daraja Controller
+ *
+ * Handles M-Pesa payment initiation and webhooks
+ */
 
-    if (!Body || !Body.stkCallback) {
-        return;
+export async function initiateSTKPush(req: Request, res: Response): Promise<void> {
+  try {
+    const tenantContext = verifyTenantContext(req);
+
+    const validated = stkPushSchema.parse({
+      ...req.body,
+      tenantId: tenantContext.tenantId,
+    });
+
+    const result = await darajaService.initiateSTKPush(validated);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Failed to initiate STK push', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      error: 'STK_PUSH_FAILED',
+      message: 'Failed to initiate payment',
+    });
+  }
+}
+
+export async function handleSTKCallback(req: Request, res: Response): Promise<void> {
+  try {
+    // Inject tenant context from webhook
+    const payload = req.body;
+
+    await darajaService.processSTKCallback(payload);
+
+    // Always return 200 OK to acknowledge webhook
+    res.status(200).json({
+      success: true,
+    });
+  } catch (error) {
+    logger.error('Failed to process STK callback', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // Still return 200 to avoid Daraja retry
+    res.status(200).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}
+
+export async function queryPaymentStatus(req: Request, res: Response): Promise<void> {
+  try {
+    const tenantContext = verifyTenantContext(req);
+    const { checkoutRequestID } = req.query as { checkoutRequestID: string };
+
+    if (!checkoutRequestID) {
+      return res.status(400).json({
+        error: 'MISSING_PARAM',
+        message: 'checkoutRequestID required',
+      });
     }
 
-    const callbackData = Body.stkCallback;
-    const resultCode = callbackData.ResultCode;
+    const status = await darajaService.queryPaymentStatus(
+      tenantContext.tenantId,
+      checkoutRequestID
+    );
 
-    // Process only successful checkout transactions
-    if (resultCode === 0) {
-        const metaItems = callbackData.CallbackMetadata.Item;
-        
-        let amount: number = 0;
-        let mpesaReceiptNumber: string = '';
-        let phoneNumber: string = '';
-        let transactionDateStr: string = '';
+    res.status(200).json({
+      success: true,
+      data: status,
+    });
+  } catch (error) {
+    logger.error('Failed to query payment status', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      error: 'FAILED',
+      message: 'Failed to query payment status',
+    });
+  }
+}
 
-        for (const item of metaItems) {
-            switch (item.Name) {
-                case 'Amount':
-                    amount = item.Value;
-                    break;
-                case 'MpesaReceiptNumber':
-                    mpesaReceiptNumber = item.Value;
-                    break;
-                case 'PhoneNumber':
-                    phoneNumber = String(item.Value);
-                    break;
-                case 'TransactionDate':
-                    transactionDateStr = String(item.Value);
-                    break;
-            }
-        }
+export const darajaRouter = Router();
 
-        try {
-            // Locate target tenant based on the merchant shortcode mapping configuration
-            const connection = await db.selectFrom('merchant_payment_connections')
-                .where('is_active', '=', true)
-                // Assuming callback includes identifier details or custom metadata parameters
-                .select(['tenant_id'])
-                .executeTakeFirst();
+darajaRouter.post('/stk-push', initiateSTKPush);
+darajaRouter.post('/callback', handleSTKCallback);
+darajaRouter.get('/status', queryPaymentStatus);
 
-            if (!connection) {
-                console.error(`No active merchant connection found for incoming automated payment: ${mpesaReceiptNumber}`);
-                return;
-            }
-
-            const tenantId = connection.tenant_id;
-
-            await db.transaction().execute(async (trx) => {
-                // Enforce Layer 2 Connection Pool Isolation Context
-                await trx.executeQuery(sql`SET LOCAL app.current_tenant_id = ${tenantId}`);
-
-                // Idempotency check: prevent duplicate callback execution logs
-                const existingPayment = await trx.selectFrom('merchant_payments')
-                    .where('mpesa_receipt_number', '=', mpesaReceiptNumber)
-                    .executeTakeFirst();
-
-                if (existingPayment) {
-                    return;
-                }
-
-                // Append payment row as UNMATCHED to await algorithmic pairing
-                await trx.insertInto('merchant_payments')
-                    .values({
-                        tenant_id: tenantId,
-                        amount: amount,
-                        mpesa_receipt_number: mpesaReceiptNumber,
-                        payer_phone: phoneNumber,
-                        status: 'UNMATCHED',
-                        raw_payload: JSON.stringify(callbackData),
-                        created_at: new Date()
-                    })
-                    .execute();
-            });
-
-        } catch (error) {
-            console.error('Failed processing inbound Daraja collection webhook item:', error);
-        }
-    }
-};
+export default darajaRouter;

@@ -1,92 +1,205 @@
 // apps/api/src/workers/index.ts
 
-import { Worker, WorkerOptions } from 'bullmq';
-import { redisConfig } from '../config/redis';
 import { logger } from '../common/logging/logger';
-
-// Import individual processor logic from the documented worker files
-import { processBillingReminders } from './billing-reminders.worker';
-import { processMerchantReconciliation } from './merchant-reconciliation.worker';
-import { processProjectionRebuild } from './projection-rebuild.worker';
-import { processReportExport } from './report-exporter.worker';
-
-/**
- * Global queue name definitions to ensure strict typing across producers and consumers.
- */
-export const QUEUES = {
-  BILLING_REMINDERS: 'billing-reminders-queue',
-  MERCHANT_RECONCILIATION: 'merchant-reconciliation-queue',
-  PROJECTION_REBUILD: 'projection-rebuild-queue',
-  REPORT_EXPORTER: 'report-exporter-queue',
-} as const;
+import { billingRemindersWorker } from './billing-reminders.worker';
+import { merchantReconciliationWorker } from './merchant-reconciliation.worker';
+import { projectionRebuildWorker } from './projection-rebuild.worker';
+import { reportExporterWorker } from './report-exporter.worker';
+import { syncCleanupWorker } from './sync-cleanup.worker';
+import { notificationWorker } from './notification.worker';
+import { licenseExpiryWorker } from './license-expiry.worker';
+import { cacheRefreshWorker } from './cache-refresh.worker';
+import { auditPruningWorker } from './audit-pruning.worker';
+import { analyticsRefreshWorker } from './analytics-refresh.worker';
+import { staleStockWorker } from './stale-stock.worker';
+import { customerAgingWorker } from './customer-aging.worker';
+import { queues, initializeQueueListeners } from '../config/queues';
 
 /**
- * Standardized BullMQ worker parameters optimized for production.
- * Ensures successful jobs are purged to save memory, while failed jobs 
- * are retained for 24 hours for debugging.
+ * All active workers
  */
-const defaultWorkerOptions: Omit<WorkerOptions, 'connection'> = {
-  concurrency: 5,
-  removeOnComplete: { age: 3600, count: 1000 },
-  removeOnFail: { age: 24 * 3600 },
+export const workers = {
+  billingReminders: billingRemindersWorker,
+  merchantReconciliation: merchantReconciliationWorker,
+  projectionRebuild: projectionRebuildWorker,
+  reportExporter: reportExporterWorker,
+  syncCleanup: syncCleanupWorker,
+  notifications: notificationWorker,
+  licenseExpiry: licenseExpiryWorker,
+  cacheRefresh: cacheRefreshWorker,
+  auditPruning: auditPruningWorker,
+  analyticsRefresh: analyticsRefreshWorker,
+  staleStock: staleStockWorker,
+  customerAging: customerAgingWorker,
 };
 
 /**
- * Bootstraps all BullMQ background workers for the BuzzNa D74 distributed async engine.
- * Must be executed during the application bootstrap phase (e.g., inside server.ts).
+ * Initialize all workers
  */
-export const initializeWorkers = (): void => {
+export async function initializeWorkers(): Promise<void> {
   try {
-    logger.info('Initializing distributed background workers (Redis + BullMQ)...');
+    logger.info('Initializing background workers...');
 
-    // 1. Automated Alerts: Evaluates tenant expiration dates and distributes automated alerts.
-    const billingWorker = new Worker(
-      QUEUES.BILLING_REMINDERS,
-      processBillingReminders,
-      { ...defaultWorkerOptions, connection: redisConfig }
-    );
+    // Initialize queue listeners
+    await initializeQueueListeners();
 
-    // 2. Merchant Reconciliation: Sweeps unlinked transaction pools to pair orphaned M-Pesa receipts.
-    const reconciliationWorker = new Worker(
-      QUEUES.MERCHANT_RECONCILIATION,
-      processMerchantReconciliation,
-      { ...defaultWorkerOptions, connection: redisConfig }
-    );
-
-    // 3. Projection Rebuilder: Scans the immutable inventory_events ledger and recomputes current_quantity.
-    // NOTE: Concurrency restricted to 1 to ensure sequential event-sourced consistency.
-    const projectionWorker = new Worker(
-      QUEUES.PROJECTION_REBUILD,
-      processProjectionRebuild,
-      { ...defaultWorkerOptions, connection: redisConfig, concurrency: 1 } 
-    );
-
-    // 4. Report Exporter: Compiles dense CSV and PDF financial statement exports asynchronously.
-    const reportWorker = new Worker(
-      QUEUES.REPORT_EXPORTER,
-      processReportExport,
-      { ...defaultWorkerOptions, connection: redisConfig, concurrency: 2 }
-    );
-
-    // Attach robust error handling to prevent silent application crashes
-    const workers = [billingWorker, reconciliationWorker, projectionWorker, reportWorker];
-
-    workers.forEach((worker) => {
-      worker.on('failed', (job, err) => {
-        logger.error(`Worker [${worker.name}] Job ${job?.id} failed with error: ${err.message}`, {
-          stack: err.stack,
-          jobData: job?.data,
-        });
-      });
-
-      worker.on('error', (err) => {
-        logger.error(`Worker [${worker.name}] critical connection error: ${err.message}`, { stack: err.stack });
-      });
+    // All workers auto-initialize on import
+    logger.info('Background workers initialized', {
+      workerCount: Object.keys(workers).length,
     });
-
-    logger.info('All background workers initialized successfully and listening for jobs.');
   } catch (error) {
-    logger.error('Failed to initialize background workers:', error);
-    throw error; // Fail-fast during startup if Redis/Queue config is broken
+    logger.error('Failed to initialize workers', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-};
+}
+
+/**
+ * Schedule recurring jobs
+ */
+export async function scheduleRecurringJobs(): Promise<void> {
+  try {
+    // Billing reminders every 6 hours
+    await queues.billingReminders.add(
+      'check-all',
+      { checkAllTenants: true },
+      {
+        repeat: {
+          every: 6 * 60 * 60 * 1000,
+        },
+        jobId: 'billing-check-recurring',
+      }
+    );
+
+    // Merchant reconciliation every 30 minutes
+    await queues.merchantReconciliation.add(
+      'reconcile',
+      {},
+      {
+        repeat: {
+          every: 30 * 60 * 1000,
+        },
+        jobId: 'merchant-reconcile-recurring',
+      }
+    );
+
+    // Projection rebuild every 4 hours
+    await queues.projectionRebuild.add(
+      'rebuild-all',
+      {},
+      {
+        repeat: {
+          every: 4 * 60 * 60 * 1000,
+        },
+        jobId: 'projection-rebuild-recurring',
+      }
+    );
+
+    // Analytics refresh every 6 hours
+    await queues.analyticsRefresh.add(
+      'refresh',
+      {},
+      {
+        repeat: {
+          every: 6 * 60 * 60 * 1000,
+        },
+        jobId: 'analytics-refresh-recurring',
+      }
+    );
+
+    // License expiry check daily
+    await queues.licenseExpiry.add(
+      'check',
+      {},
+      {
+        repeat: {
+          every: 24 * 60 * 60 * 1000,
+        },
+        jobId: 'license-expiry-recurring',
+      }
+    );
+
+    // Sync cleanup daily
+    await queues.syncCleanup.add(
+      'cleanup',
+      {},
+      {
+        repeat: {
+          every: 24 * 60 * 60 * 1000,
+        },
+        jobId: 'sync-cleanup-recurring',
+      }
+    );
+
+    // Audit pruning weekly
+    await queues.auditPruning.add(
+      'prune',
+      {},
+      {
+        repeat: {
+          every: 7 * 24 * 60 * 60 * 1000,
+        },
+        jobId: 'audit-pruning-recurring',
+      }
+    );
+
+    // Stale stock detection daily
+    await queues.staleStock.add(
+      'detect',
+      {},
+      {
+        repeat: {
+          every: 24 * 60 * 60 * 1000,
+        },
+        jobId: 'stale-stock-recurring',
+      }
+    );
+
+    // Customer aging daily
+    await queues.customerAging.add(
+      'analyze',
+      {},
+      {
+        repeat: {
+          every: 24 * 60 * 60 * 1000,
+        },
+        jobId: 'customer-aging-recurring',
+      }
+    );
+
+    logger.info('Recurring jobs scheduled');
+  } catch (error) {
+    logger.error('Failed to schedule recurring jobs', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+/**
+ * Graceful shutdown
+ */
+export async function shutdownWorkers(): Promise<void> {
+  try {
+    logger.info('Shutting down background workers...');
+
+    await Promise.all(
+      Object.values(workers).map((worker) =>
+        worker.close().catch((error) => {
+          logger.error('Error closing worker', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+      )
+    );
+
+    logger.info('All workers closed');
+  } catch (error) {
+    logger.error('Failed to shutdown workers', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+export default workers;

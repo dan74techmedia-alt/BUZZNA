@@ -1,106 +1,140 @@
-import { Response, Router } from 'express';
-import { sql, ExpressionBuilder } from 'kysely';
-import { withTenant } from '../../config/database';
-import { createSaleSchema } from './sales.schema';
-import { AuthenticatedRequest, enforceTenantContext } from '../../common/middleware/tenant-context';
-import { DB } from '../../database/types'; // Ensure this path points to your actual DB interface definition
+// apps/api/src/modules/sales/sales.controller.ts
 
-export const salesRouter = Router();
-salesRouter.use(enforceTenantContext);
+import { Router, Request, Response } from 'express';
+import { logger } from '../../common/logging/logger';
+import { AppError } from '../../common/errors/AppError';
+import { verifyTenantContext, getDbTransaction } from '../../common/middleware/tenant-transaction.middleware';
+import { salesService } from './sales.service';
+import { validateRequest } from '../../common/middleware/validation.middleware';
+import { createSaleSchema, refundSchema } from './sales.schema';
 
-salesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
+/**
+ * Sales Controller
+ *
+ * Handles POS checkout, refunds, voids
+ * All operations enforce tenant isolation and append-only ledger
+ */
+
+export async function createSale(req: Request, res: Response): Promise<void> {
   try {
-    const data = createSaleSchema.parse(req.body);
-    const tenantId = req.user!.tenantId;
-    const userId = req.user!.userId;
+    const tenantContext = verifyTenantContext(req);
+    const trx = getDbTransaction(req);
 
-    const saleTotal = data.items.reduce((sum, item) => sum + (item.quantity * item.unitPrice) - item.lineDiscount, 0);
-    const discountTotal = data.items.reduce((sum, item) => sum + item.lineDiscount, 0);
+    // Validate request
+    const validated = createSaleSchema.parse(req.body);
 
-    const saleResult = await withTenant(tenantId, async (trx) => {
-      // 1. Write Header Manifest
-      const sale = await trx.insertInto('sales')
-        .values({
-          tenant_id: tenantId,
-          till_session_id: data.tillSessionId,
-          customer_id: data.customerId || null,
-          status: 'FINALIZED',
-          total_amount: saleTotal.toString(),
-          discount_amount: discountTotal.toString(),
-          notes: data.notes || null,
-        })
-        .returning('sale_id')
-        .executeTakeFirstOrThrow();
+    // Create sale (includes inventory dispatch, payment allocation)
+    const sale = await salesService.createSale(
+      tenantContext.tenantId,
+      tenantContext.userId || '',
+      validated,
+      trx
+    );
 
-      // 2. Write Sale Items & Deduct Inventory via Event Log
-      for (const item of data.items) {
-        await trx.insertInto('sale_items')
-          .values({
-            tenant_id: tenantId,
-            sale_id: sale.sale_id,
-            product_id: item.productId,
-            quantity: item.quantity.toString(),
-            unit_price: item.unitPrice.toString(),
-            line_discount: item.lineDiscount.toString(),
-          })
-          .execute();
-
-        // Append Event Sourced Inventory Deduction
-        await trx.insertInto('inventory_events')
-          .values({
-            tenant_id: tenantId,
-            product_id: item.productId,
-            event_type: 'SALE_DISPATCH',
-            quantity_delta: (-Math.abs(item.quantity)).toString(), 
-            unit_selling_price: item.unitPrice.toString(),
-            actor_user_id: userId,
-          })
-          .execute();
-
-        // Project cached inventory
-        // Explicitly typed 'eb' to satisfy strict TypeScript requirements
-        await trx.updateTable('products')
-          .set((eb: ExpressionBuilder<DB, 'products'>) => ({
-            current_quantity: sql`current_quantity - ${item.quantity}`,
-          }))
-          .where('product_id', '=', item.productId)
-          .execute();
-      }
-
-      // 3. Write Payment Allocations
-      let cashTotal = 0;
-      for (const payment of data.paymentAllocations) {
-        await trx.insertInto('sale_payment_allocations')
-          .values({
-            tenant_id: tenantId,
-            sale_id: sale.sale_id,
-            payment_method: payment.paymentMethod,
-            amount: payment.amount.toString(),
-            merchant_payment_id: payment.merchantPaymentId || null,
-          })
-          .execute();
-          
-        if (payment.paymentMethod === 'CASH') {
-            cashTotal += payment.amount;
-        }
-      }
-
-      // 4. Update Till Expected Balance
-      if (cashTotal > 0) {
-        // Explicitly typed 'eb'
-        await trx.updateTable('till_sessions')
-          .set((eb: ExpressionBuilder<DB, 'till_sessions'>) => ({
-            expected_cash_balance: sql`expected_cash_balance + ${cashTotal}`,
-          }))
-          .where('till_session_id', '=', data.tillSessionId)
-          .execute();
-      }
-
-      return sale.sale_id;
+    logger.info('Sale created', {
+      tenantId: tenantContext.tenantId,
+      transactionId: sale.transaction_id,
+      total: sale.gross_total,
     });
 
-    res.status(201).json({ message: 'Sale finalized successfully', saleId: saleResult });
-  } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Failed to process sale manifest' });
+    res.status(201).json({
+      success: true,
+      data: sale,
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        error: error.code,
+        message: error.message,
+      });
+    } else {
+      logger.error('Failed to create sale', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({
+        error: 'SALE_CREATION_FAILED',
+        message: 'Failed to create sale',
+      });
+    }
   }
-});
+}
+
+export async function refundSale(req: Request, res: Response): Promise<void> {
+  try {
+    const tenantContext = verifyTenantContext(req);
+    const trx = getDbTransaction(req);
+
+    const { saleId } = req.params;
+
+    // Validate request
+    const validated = refundSchema.parse(req.body);
+
+    // Process refund
+    const refund = await salesService.refundSale(
+      tenantContext.tenantId,
+      saleId,
+      tenantContext.userId || '',
+      validated,
+      trx
+    );
+
+    logger.info('Sale refunded', {
+      tenantId: tenantContext.tenantId,
+      saleId,
+      refundAmount: refund.amount_kes,
+    });
+
+    res.status(200).json({
+      success: true,
+      data: refund,
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        error: error.code,
+        message: error.message,
+      });
+    } else {
+      logger.error('Failed to refund sale', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({
+        error: 'REFUND_FAILED',
+        message: 'Failed to process refund',
+      });
+    }
+  }
+}
+
+export async function getSaleDetails(req: Request, res: Response): Promise<void> {
+  try {
+    const tenantContext = verifyTenantContext(req);
+    const { saleId } = req.params;
+
+    const sale = await salesService.getSaleDetails(
+      tenantContext.tenantId,
+      saleId
+    );
+
+    res.status(200).json({
+      success: true,
+      data: sale,
+    });
+  } catch (error) {
+    logger.error('Failed to get sale details', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      error: 'FAILED',
+      message: 'Failed to retrieve sale',
+    });
+  }
+}
+
+export const salesRouter = Router();
+
+salesRouter.post('/', createSale);
+salesRouter.post('/:saleId/refund', refundSale);
+salesRouter.get('/:saleId', getSaleDetails);
+
+export default salesRouter;

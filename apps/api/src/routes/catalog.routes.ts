@@ -1,20 +1,23 @@
+// apps/api/src/routes/catalog.routes.ts
+
 import { Router } from 'express';
-import * as catalogController from '../modules/catalog/catalog.controller';
-import { enforceLicenseWriteAccess } from '../common/middleware/license-lockdown.middleware';
+import { authMiddleware } from '../common/middleware/auth.middleware';
+import { rbacMiddleware } from '../common/middleware/rbac.middleware';
+import {
+  createProduct,
+  listProducts,
+  updateProduct,
+  deleteProduct,
+} from '../modules/catalog/catalog.controller';
 
 const router = Router();
 
-// Get catalog items (Read operations remain available even if payment is due)
-router.get('/', catalogController.getProducts);
-router.get('/:id', catalogController.getProductById);
-router.get('/categories', catalogController.getCategories);
+router.use(authMiddleware);
 
-// Create catalog item. Requires catalog.manage permission rule and active license
-router.post('/', enforceLicenseWriteAccess, catalogController.createProduct);
-router.put('/:id', enforceLicenseWriteAccess, catalogController.updateProduct);
-
-// Category Management
-router.post('/categories', enforceLicenseWriteAccess, catalogController.createCategory);
-router.put('/categories/:id', enforceLicenseWriteAccess, catalogController.updateCategory);
+// Catalog management (owner/manager only)
+router.post('/', rbacMiddleware(['owner', 'manager']), createProduct);
+router.get('/', listProducts); // All authenticated users
+router.put('/:productId', rbacMiddleware(['owner', 'manager']), updateProduct);
+router.delete('/:productId', rbacMiddleware(['owner', 'manager']), deleteProduct);
 
 export default router;

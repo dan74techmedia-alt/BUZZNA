@@ -1,23 +1,57 @@
+// apps/api/src/routes/billing.routes.ts (UPDATED with Paystack webhook)
+
 import { Router } from 'express';
-import * as billingController from '../modules/billing/billing.controller';
-import * as paystackController from '../modules/billing/paystack.controller';
-import { requireAuth } from '../common/middleware/auth.middleware';
+import { authMiddleware } from '../common/middleware/auth.middleware';
+import { rbacMiddleware } from '../common/middleware/rbac.middleware';
+import { 
+  initializePayment,
+  getSubscriptionPlans,
+  getBillingHistory,
+  getCurrentSubscription,
+} from '../modules/billing/billing.controller';
+import { paystackRouter } from '../modules/billing/paystack.controller';
+
+/**
+ * Billing Routes (Updated)
+ *
+ * /api/v1/billing
+ *   GET /plans - List subscription plans (public)
+ *   POST /initialize-payment - Start Paystack checkout (auth required)
+ *   GET /history - Billing history (owner/accountant)
+ *   GET /current - Current subscription status (auth required)
+ *   POST /paystack/webhook - Paystack callback (signature verified, no auth)
+ */
 
 const router = Router();
 
-// Paystack Webhooks (Public endpoint, signature validated inside controller)
-// Must be mounted before requireAuth or mapped carefully if mounted under protected route in index
-router.post('/paystack/webhook', paystackController.handleWebhook);
+// Public endpoints - no auth required
+router.get('/plans', getSubscriptionPlans);
 
-// Protected Billing Operations
-router.use(requireAuth);
+// Paystack webhook (signature verified, no auth)
+router.use('/paystack', paystackRouter);
 
-// Fetch current subscription plans and billing history
-router.get('/plans', billingController.getSubscriptionPlans);
-router.get('/invoices', billingController.getInvoices);
-router.get('/status', billingController.getLicenseStatus);
+// Protected endpoints - require auth
+router.use(authMiddleware);
 
-// Start corporate BuzzNa billing monetization pipelines
-router.post('/paystack/initiate', paystackController.initiatePayment);
+// Initialize payment
+router.post(
+  '/initialize-payment',
+  rbacMiddleware(['owner', 'accountant']),
+  initializePayment
+);
+
+// Get billing history
+router.get(
+  '/history',
+  rbacMiddleware(['owner', 'accountant']),
+  getBillingHistory
+);
+
+// Get current subscription
+router.get(
+  '/current',
+  rbacMiddleware(['owner', 'manager', 'cashier']),
+  getCurrentSubscription
+);
 
 export default router;

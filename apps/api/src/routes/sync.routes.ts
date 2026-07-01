@@ -1,15 +1,34 @@
+// apps/api/src/routes/sync.routes.ts
+
 import { Router } from 'express';
-import * as syncController from '../modules/sync/sync.controller';
-import { enforceLicenseWriteAccess } from '../common/middleware/license-lockdown.middleware';
+import { authMiddleware } from '../common/middleware/auth.middleware';
+import { idempotencyMiddleware } from '../common/middleware/idempotency.middleware';
+import {
+  uploadSyncBatch,
+  getSyncStatus,
+} from '../modules/sync/sync.controller';
+
+/**
+ * Sync Routes
+ *
+ * /api/v1/sync
+ *   POST /batches - Upload offline sync batch (idempotent)
+ *   GET /batches/:batchId - Check sync batch status
+ */
 
 const router = Router();
 
-// Retrieve synchronization history and rejection logs
-router.get('/history', syncController.getSyncHistory);
-router.get('/rejections', syncController.getSyncRejections);
+// All sync operations require auth
+router.use(authMiddleware);
 
-// Upload offline replication packet array from terminal IndexedDB stores.
-// Implements the "Walkaway" Sync Protocol for conflict resolution.
-router.post('/batches', enforceLicenseWriteAccess, syncController.uploadBatches);
+// Upload sync batch - MUST be idempotent (may be retried)
+router.post(
+  '/batches',
+  idempotencyMiddleware,
+  uploadSyncBatch
+);
+
+// Get sync batch status
+router.get('/batches/:batchId', getSyncStatus);
 
 export default router;

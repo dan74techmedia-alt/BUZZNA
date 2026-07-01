@@ -1,51 +1,78 @@
+// apps/api/src/modules/sync/sync.controller.ts
+
 import { Router, Request, Response } from 'express';
-import { syncEventSchema } from '../automation/automation.schema';
-import { db } from '../../config/database';
+import { logger } from '../../common/logging/logger';
+import { verifyTenantContext, getDbTransaction } from '../../common/middleware/tenant-transaction.middleware';
+import { syncService } from './sync.service';
+import { syncBatchSchema } from './sync.schema';
+
+/**
+ * Sync Controller
+ *
+ * Handles offline sync batch uploads and status queries
+ */
+
+export async function uploadSyncBatch(req: Request, res: Response): Promise<void> {
+  try {
+    const tenantContext = verifyTenantContext(req);
+
+    const validated = syncBatchSchema.parse(req.body);
+
+    const result = await syncService.processSyncBatch({
+      ...validated,
+      tenantId: tenantContext.tenantId,
+      userId: tenantContext.userId || '',
+    });
+
+    // Get server snapshot for client cache update
+    const snapshot = await syncService.getServerSnapshot(tenantContext.tenantId);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...result,
+        serverSnapshot: snapshot,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to upload sync batch', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      error: 'SYNC_FAILED',
+      message: 'Failed to process sync batch',
+    });
+  }
+}
+
+export async function getSyncStatus(req: Request, res: Response): Promise<void> {
+  try {
+    const tenantContext = verifyTenantContext(req);
+    const { batchId } = req.params;
+
+    const status = await syncService.getSyncStatus(
+      tenantContext.tenantId,
+      batchId
+    );
+
+    res.status(200).json({
+      success: true,
+      data: status,
+    });
+  } catch (error) {
+    logger.error('Failed to get sync status', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      error: 'FAILED',
+      message: 'Failed to retrieve sync status',
+    });
+  }
+}
 
 export const syncRouter = Router();
 
-// Endpoint for the offline PWA to push batched events
-syncRouter.post('/batch', async (req: Request, res: Response) => {
-  const tenantId = req.headers['x-tenant-id'] as string;
-  const events = req.body.events; // Expecting an array of events
+syncRouter.post('/batches', uploadSyncBatch);
+syncRouter.get('/batches/:batchId', getSyncStatus);
 
-  if (!Array.isArray(events)) {
-    return res.status(400).json({ error: 'Events must be an array' });
-  }
-
-  const processedIds: string[] = [];
-  const rejectedEvents: any[] = [];
-
-  for (const event of events) {
-    try {
-      // 1. Validate individual event
-      const parsedEvent = syncEventSchema.parse(event);
-
-      // 2. Insert into sync_events
-      await db('sync_events').insert({
-        tenant_id: tenantId,
-        event_type: parsedEvent.event_type,
-        payload: JSON.stringify(parsedEvent.payload),
-        occurred_at: parsedEvent.occurred_at
-      });
-
-      processedIds.push(parsedEvent.client_event_id);
-    } catch (error: any) {
-      // 3. Log into sync_rejections if validation or insert fails
-      await db('sync_rejections').insert({
-        tenant_id: tenantId,
-        client_event_id: event.client_event_id || 'UNKNOWN',
-        rejection_code: error.name === 'ZodError' ? 'VALIDATION_FAILED' : 'DB_ERROR',
-        reason: error.message
-      });
-      rejectedEvents.push(event.client_event_id);
-    }
-  }
-
-  // Idempotent response: tell the client what succeeded so they can clear their IndexedDB queues
-  res.status(200).json({
-    message: 'Sync batch processed',
-    acknowledged: processedIds,
-    rejected: rejectedEvents
-  });
-});
+export default syncRouter;

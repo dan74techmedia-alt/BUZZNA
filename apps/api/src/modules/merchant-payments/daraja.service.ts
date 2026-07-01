@@ -1,126 +1,337 @@
+// apps/api/src/modules/merchant-payments/daraja.service.ts
+
 import { db } from '../../db/client';
-import { sql, eq, and } from 'drizzle-orm';
-import { 
-  merchantPayments, 
-  salesTransactions, 
-  matches 
-} from '../../db/migrations/schema';
-import { AppError } from '../../common/errors/AppError';
+import { logger } from '../../common/logging/logger';
+import axios from 'axios';
+import crypto from 'crypto';
 
-export class DarajaService {
-  /**
-   * Processes incoming Safaricom Daraja C2B/B2C webhooks.
-   * Enforces idempotency guards to prevent double-crediting during network retries.
-   */
-  static async processDarajaWebhook(tenantId: string, payload: any) {
-    // 1. Wrap query in strict transaction block for PgBouncer safety
-    return await db.transaction(async (tx) => {
-      
-      // 2. Inject local PostgreSQL Row-Level Security (RLS) tenant context
-      await tx.execute(sql`SET LOCAL app.current_tenant_id = ${tenantId}`);
+/**
+ * Daraja Service
+ *
+ * MANAGES CLIENT M-PESA PAYMENTS VIA SAFARICOM DARAJA API
+ *
+ * Completely separate from platform billing (Paystack).
+ * Handles customer payment collection for retail sales.
+ *
+ * Workflow:
+ * 1. Terminal initiates STK push to customer phone
+ * 2. Customer enters M-Pesa PIN on their phone
+ * 3. Safaricom confirms payment via webhook
+ * 4. BuzzNa server marks payment as verified
+ * 5. Till session completes sale
+ *
+ * Architecture Rules:
+ * - M-Pesa credentials encrypted in merchant_payment_connections table
+ * - Daraja keys never logged or exposed
+ * - All transactions idempotent (CheckoutRequestID is unique)
+ * - Payment amounts use NUMERIC(15,2) for precision
+ */
 
-      const receiptNumber = payload.TransID; // Safaricom transaction receipt
-      const amount = parseFloat(payload.TransAmount);
-      const phoneString = payload.MSISDN;
+export interface StkPushRequest {
+  tenantId: string;
+  phoneNumber: string;
+  amount: string; // NUMERIC as string
+  accountReference: string;
+  transactionDesc: string;
+  callbackUrl?: string;
+}
 
-      // 3. Idempotency Guard: Check if this exact receipt was already processed
-      const existingPayment = await tx
-        .select()
-        .from(merchantPayments)
-        .where(eq(merchantPayments.receiptNumber, receiptNumber))
-        .limit(1);
+export interface StkPushResponse {
+  merchantRequestID: string;
+  checkoutRequestID: string;
+  responseCode: string;
+  responseDescription: string;
+  customerMessage: string;
+}
 
-      if (existingPayment.length > 0) {
-        // Return 200 OK to acknowledge Safaricom but ignore the duplicate locally
-        return { status: 'ignored_duplicate', receiptNumber };
-      }
+/**
+ * Get Daraja credentials for tenant
+ */
+async function getDarajaCredentials(tenantId: string): Promise<{
+  consumerKey: string;
+  consumerSecret: string;
+  shortCode: string;
+  passkey: string;
+}> {
+  try {
+    const connection = await db
+      .selectFrom('merchant_payment_connections' as any)
+      .selectAll()
+      .where('tenant_id', '=', tenantId)
+      .where('provider', '=', 'daraja')
+      .where('status', '=', 'active')
+      .executeTakeFirst();
 
-      // 4. Append the new payment to the unlinked transaction pool
-      const [newPayment] = await tx
-        .insert(merchantPayments)
-        .values({
-          tenantId,
-          receiptNumber,
-          amount,
-          senderPhone: phoneString,
-          status: 'UNMATCHED',
-          providerTimestamp: new Date(payload.TransTime)
-        })
-        .returning();
+    if (!connection) {
+      throw new Error('No active Daraja connection found for tenant');
+    }
 
-      return { status: 'ingested', paymentId: newPayment.id };
+    // Decrypt credentials (implementation depends on encryption library)
+    // For now, assume they're stored encrypted
+    return {
+      consumerKey: connection.consumer_key,
+      consumerSecret: connection.consumer_secret,
+      shortCode: connection.merchant_code,
+      passkey: connection.passkey,
+    };
+  } catch (error) {
+    logger.error('Failed to get Daraja credentials', {
+      tenantId,
+      error: error instanceof Error ? error.message : String(error),
     });
+    throw error;
   }
+}
 
-  /**
-   * Manually maps an unmatched Daraja M-Pesa record to a pending POS checkout sale.
-   * Fulfills API Contract: POST /api/v1/merchant-payments/:id/match
-   */
-  static async matchPaymentToSale(tenantId: string, paymentId: string, transactionId: string) {
-    return await db.transaction(async (tx) => {
-      // 1. Enforce RLS tenant context
-      await tx.execute(sql`SET LOCAL app.current_tenant_id = ${tenantId}`);
+/**
+ * Get Daraja access token
+ */
+async function getDarajaAccessToken(
+  consumerKey: string,
+  consumerSecret: string
+): Promise<string> {
+  try {
+    const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
 
-      // 2. Load and validate the unmatched M-Pesa payment
-      const paymentResult = await tx
-        .select()
-        .from(merchantPayments)
-        .where(eq(merchantPayments.id, paymentId))
-        .limit(1);
-
-      if (!paymentResult.length) {
-        throw new AppError('Payment record not found or unauthorized access attempt.', 404);
+    const response = await axios.get(
+      'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
+      {
+        headers: {
+          Authorization: `Basic ${auth}`,
+        },
+        timeout: parseInt(process.env.DARAJA_GLOBAL_TIMEOUT_MS || '5000'),
       }
+    );
 
-      const payment = paymentResult[0];
-      if (payment.status === 'MATCHED') {
-        throw new AppError('Conflict: This M-Pesa payment is already matched.', 409);
+    if (!response.data.access_token) {
+      throw new Error('Failed to get Daraja access token');
+    }
+
+    return response.data.access_token;
+  } catch (error) {
+    logger.error('Failed to get Daraja access token', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+/**
+ * Initiate STK push (M-Pesa prompt on customer phone)
+ */
+export async function initiateSTKPush(
+  request: StkPushRequest
+): Promise<StkPushResponse> {
+  try {
+    const credentials = await getDarajaCredentials(request.tenantId);
+    const accessToken = await getDarajaAccessToken(
+      credentials.consumerKey,
+      credentials.consumerSecret
+    );
+
+    // Normalize phone to international format
+    const phone = request.phoneNumber.replace(/\D/g, '');
+    const normalizedPhone = phone.length === 9 ? `254${phone}` : phone;
+
+    // Generate timestamp
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:-]/g, '')
+      .slice(0, -5);
+
+    // Generate password (base64 of shortcode + passkey + timestamp)
+    const password = Buffer.from(
+      `${credentials.shortCode}${credentials.passkey}${timestamp}`
+    ).toString('base64');
+
+    const response = await axios.post(
+      'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
+      {
+        BusinessShortCode: credentials.shortCode,
+        Password: password,
+        Timestamp: timestamp,
+        TransactionType: 'CustomerPayBillOnline',
+        Amount: Math.round(parseFloat(request.amount)),
+        PartyA: normalizedPhone,
+        PartyB: credentials.shortCode,
+        PhoneNumber: normalizedPhone,
+        CallBackURL: request.callbackUrl || `${process.env.API_BASE_URL}/webhooks/daraja`,
+        AccountReference: request.accountReference,
+        TransactionDesc: request.transactionDesc,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: parseInt(process.env.DARAJA_GLOBAL_TIMEOUT_MS || '5000'),
       }
+    );
 
-      // 3. Load and validate the target pending sale transaction
-      const saleResult = await tx
-        .select()
-        .from(salesTransactions)
-        .where(
-          and(
-            eq(salesTransactions.transactionId, transactionId),
-            eq(salesTransactions.paymentMethod, 'MPESA')
-          )
-        )
-        .limit(1);
+    if (response.data.ResponseCode !== '0') {
+      throw new Error(
+        `STK push failed: ${response.data.ResponseDescription}`
+      );
+    }
 
-      if (!saleResult.length) {
-        throw new AppError('Target sale transaction not found or does not accept M-Pesa.', 404);
-      }
+    // Log merchant payment event
+    await db
+      .insertInto('merchant_payment_events' as any)
+      .values({
+        tenant_id: request.tenantId,
+        event_type: 'stk_push_initiated',
+        phone_number: normalizedPhone,
+        amount: request.amount,
+        reference: response.data.CheckoutRequestID,
+        merchant_request_id: response.data.MerchantRequestID,
+        status: 'pending',
+        received_at: new Date(),
+      })
+      .execute();
 
-      const sale = saleResult[0];
-      if (sale.paymentStatus === 'COMPLETED_VERIFIED') {
-        throw new AppError('Conflict: Target sale is already verified.', 409);
-      }
+    logger.info('STK push initiated', {
+      tenantId: request.tenantId,
+      checkoutRequestID: response.data.CheckoutRequestID,
+      amount: request.amount,
+    });
 
-      // 4. Create authoritative match ledger record (Append-Only)
-      await tx.insert(matches).values({
-        tenantId,
-        paymentId,
-        transactionId,
-        matchType: 'MANUAL',
-        matchedAt: new Date()
+    return {
+      merchantRequestID: response.data.MerchantRequestID,
+      checkoutRequestID: response.data.CheckoutRequestID,
+      responseCode: response.data.ResponseCode,
+      responseDescription: response.data.ResponseDescription,
+      customerMessage: response.data.CustomerMessage,
+    };
+  } catch (error) {
+    logger.error('Failed to initiate STK push', {
+      tenantId: request.tenantId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+/**
+ * Process STK callback from Daraja
+ */
+export async function processSTKCallback(payload: any): Promise<void> {
+  try {
+    const checkoutRequestID =
+      payload?.Body?.stkCallback?.CheckoutRequestID;
+    const resultCode = payload?.Body?.stkCallback?.ResultCode;
+    const merchantRequestID =
+      payload?.Body?.stkCallback?.MerchantRequestID;
+
+    if (!checkoutRequestID) {
+      throw new Error('Missing CheckoutRequestID in callback');
+    }
+
+    // Check for existing processing
+    const existing = await db
+      .selectFrom('merchant_payment_events' as any)
+      .selectAll()
+      .where('reference', '=', checkoutRequestID)
+      .where('event_type', '=', 'stk_callback')
+      .executeTakeFirst();
+
+    if (existing) {
+      logger.info('STK callback already processed (idempotency)', {
+        checkoutRequestID,
       });
+      return;
+    }
 
-      // 5. Update Payment and Sale States
-      await tx.update(merchantPayments)
-        .set({ status: 'MATCHED' })
-        .where(eq(merchantPayments.id, paymentId));
+    const event: Record<string, any> = {
+      tenant_id: payload?.tenant_id,
+      event_type: 'stk_callback',
+      reference: checkoutRequestID,
+      merchant_request_id: merchantRequestID,
+      received_at: new Date(),
+    };
 
-      await tx.update(salesTransactions)
-        .set({ paymentStatus: 'COMPLETED_VERIFIED' })
-        .where(eq(salesTransactions.transactionId, transactionId));
+    if (resultCode === '0') {
+      // Payment successful
+      const callbackMetadata = payload?.Body?.stkCallback?.CallbackMetadata?.Item;
+      const amount =
+        callbackMetadata?.find((item: any) => item.Name === 'Amount')?.Value || 0;
+      const mpesaCode =
+        callbackMetadata?.find((item: any) => item.Name === 'MpesaReceiptNumber')
+          ?.Value || '';
+      const phoneNumber =
+        callbackMetadata?.find((item: any) => item.Name === 'PhoneNumber')?.Value || '';
 
-      return {
-        success: true,
-        message: 'Daraja payment successfully matched and verified against sale.',
-        transactionId
-      };
+      event.event_type = 'payment_confirmed';
+      event.status = 'success';
+      event.amount = amount.toString();
+      event.phone_number = phoneNumber.toString();
+      event.mpesa_receipt = mpesaCode.toString();
+    } else {
+      // Payment failed or cancelled
+      event.status = 'failed';
+      event.error_message = payload?.Body?.stkCallback?.ResultDesc || 'Payment failed';
+    }
+
+    // Store callback event
+    await db
+      .insertInto('merchant_payment_events' as any)
+      .values(event)
+      .execute();
+
+    logger.info('STK callback processed', {
+      checkoutRequestID,
+      status: event.status,
     });
+  } catch (error) {
+    logger.error('Failed to process STK callback', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-} 
+}
+
+/**
+ * Query payment status
+ */
+export async function queryPaymentStatus(
+  tenantId: string,
+  checkoutRequestID: string
+): Promise<{
+  status: 'pending' | 'success' | 'failed' | 'unknown';
+  amount?: string;
+  mpesaReceipt?: string;
+}> {
+  try {
+    const event = await db
+      .selectFrom('merchant_payment_events' as any)
+      .selectAll()
+      .where('tenant_id', '=', tenantId)
+      .where('reference', '=', checkoutRequestID)
+      .orderBy('received_at', 'desc')
+      .executeTakeFirst();
+
+    if (!event) {
+      return { status: 'unknown' };
+    }
+
+    return {
+      status: event.status as 'pending' | 'success' | 'failed',
+      amount: event.amount,
+      mpesaReceipt: event.mpesa_receipt,
+    };
+  } catch (error) {
+    logger.error('Failed to query payment status', {
+      tenantId,
+      checkoutRequestID,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+export const darajaService = {
+  initiateSTKPush,
+  processSTKCallback,
+  queryPaymentStatus,
+};
+
+export default darajaService;

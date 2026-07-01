@@ -1,66 +1,78 @@
-import { Request, Response } from 'express';
-import crypto from 'crypto';
-import { db } from '../../bootstrap/database';
+// apps/api/src/modules/billing/paystack.controller.ts
 
-export const handlePaystackWebhook = async (req: Request, res: Response) => {
-    const secret = process.env.PAYSTACK_WEBHOOK_SECRET as string;
-    const signature = req.headers['x-paystack-signature'] as string;
+import { Router, Request, Response } from 'express';
+import { logger } from '../../common/logging/logger';
+import { createWebhookVerificationMiddleware } from '../../common/middleware/webhook-verification.middleware';
+import { billingService } from './billing.service';
+import { notificationsService } from '../notifications/notifications.service';
 
-    // 1. HMAC-SHA512 Cryptographic Verification
-    const hash = crypto.createHmac('sha512', secret)
-                       .update(JSON.stringify(req.body))
-                       .digest('hex');
+/**
+ * Paystack Webhook Controller
+ *
+ * Handles payment confirmations from Paystack
+ * Webhook is signature-verified and idempotent
+ */
 
-    if (hash !== signature) {
-        return res.status(400).json({ error: 'Invalid webhook signature' });
+export async function handlePaystackWebhook(req: Request, res: Response): Promise<void> {
+  try {
+    const payload = req.body;
+
+    // Extract reference from Paystack payload
+    const reference = payload?.data?.reference;
+
+    if (!reference) {
+      logger.warn('Paystack webhook missing reference');
+      return res.status(400).json({
+        error: 'MISSING_REFERENCE',
+      });
     }
 
-    const event = req.body;
+    // Verify payment
+    const result = await billingService.verifyPaystackPayment(reference);
 
-    // Fast return 200 to acknowledge receipt to Paystack immediately
-    res.status(200).send('Webhook received');
-
-    // 2. Process Successful Payment (Asynchronously or via BullMQ in production)
-    if (event.event === 'charge.success') {
-        const paystackReference = event.data.reference;
-        const amountPaid = event.data.amount / 100; // Paystack amounts are in kobo/cents
-        const tenantId = event.data.metadata.tenant_id;
-
-        try {
-            // 3. Idempotency Check: Prevent Double-Crediting
-            const existingPayment = await db.selectFrom('subscription_payments')
-                .where('paystack_reference', '=', paystackReference)
-                .executeTakeFirst();
-
-            if (existingPayment) {
-                console.log(`Payment ${paystackReference} already processed. Skipping.`);
-                return;
-            }
-
-            // 4. Update Database (Insert Payment & Update License Status)
-            await db.transaction().execute(async (trx) => {
-                // Set Layer 2 Context Enforcement
-                await trx.executeQuery(sql`SET LOCAL app.current_tenant_id = ${tenantId}`);
-
-                await trx.insertInto('subscription_payments')
-                    .values({
-                        tenant_id: tenantId,
-                        paystack_reference: paystackReference,
-                        amount_paid: amountPaid,
-                        raw_webhook_payload: event.data
-                    })
-                    .execute();
-
-                // Restore business operational scope
-                await trx.updateTable('businesses')
-                    .set({ license_status: 'ACTIVE_MONTHLY' })
-                    .where('tenant_id', '=', tenantId)
-                    .execute();
-            });
-
-        } catch (error) {
-            console.error('Failed to process Paystack webhook:', error);
-            // In a robust system, drop this into a Dead Letter Queue or BullMQ retry loop
-        }
+    if (!result.success) {
+      logger.warn('Paystack payment verification failed', {
+        reference,
+      });
+      return res.status(200).json({
+        success: false,
+      });
     }
-};
+
+    logger.info('Paystack payment verified and processed', {
+      reference,
+      tenantId: result.tenantId,
+      planId: result.planId,
+    });
+
+    res.status(200).json({
+      success: true,
+    });
+  } catch (error) {
+    logger.error('Paystack webhook processing failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    // Return 200 to acknowledge receipt (Paystack will retry if 4xx/5xx)
+    res.status(200).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}
+
+export const paystackRouter = Router();
+
+// Webhook verification middleware (signature + idempotency)
+const paystackWebhookMiddleware = createWebhookVerificationMiddleware({
+  provider: 'paystack',
+  secretKey: process.env.PAYSTACK_WEBHOOK_HMAC_SECRET || '',
+  headerName: 'x-paystack-signature',
+  idempotencyKeyField: 'data.reference',
+  eventTypeField: 'event',
+});
+
+// Webhook endpoint (no auth required, signature verified)
+paystackRouter.post('/webhook', paystackWebhookMiddleware, handlePaystackWebhook);
+
+export default paystackRouter;
