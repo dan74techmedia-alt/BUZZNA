@@ -23,3 +23,7 @@ export const authStorage = {
     localStorage.removeItem(TENANT_KEY);
   }
 };
+
+// Named convenience helpers consumed by the Axios interceptors.
+export const getAuthToken = (): string | null => authStorage.getAccessToken();
+export const getTenantId = (): string | null => authStorage.getTenantId();
