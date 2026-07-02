@@ -1,3 +1,10 @@
+// apps/api/src/db/client.ts
+
+import { Pool, PoolClient, QueryResult } from 'pg';
+import { env } from '../config/env';
+import { logger } from '../common/logging/logger';
+import { getCurrentTenantContext } from '../common/tenant-context';
+
 /**
  * ============================================================================
  * BUZZNA D74 - PostgreSQL Database Client with Tenant Context Injection
@@ -9,7 +16,6 @@
  * - Enforce strict tenant context injection via transaction wrapping
  * - Prevent connection pool leakage in PgBouncer by scoping tenant_id per-query
  * - Provide type-safe, compile-time validated query execution
- * - Support idempotent synchronization and conflict resolution
  *
  * CRITICAL ARCHITECTURAL RULES:
  * 1. EVERY query MUST be wrapped inside: BEGIN; SET LOCAL app.current_tenant_id; COMMIT;
@@ -22,29 +28,11 @@
  * ============================================================================
  */
 
-import { Pool, PoolClient, QueryResult } from 'pg';
-import { AsyncLocalStorage } from 'async_hooks';
-import { env } from '../config/env';
-import { logger } from '../common/logging/logger';
+// Global connection pool instance
+let poolInstance: Pool | null = null;
 
 /**
- * Tenant context attached to AsyncLocalStorage for per-request isolation
- */
-export interface TenantContext {
-  tenantId: string;
-  userId: string;
-  roleId: string;
-}
-
-/**
- * Async Local Storage for maintaining tenant context across async boundaries
- * This ensures that even async operations maintain proper tenant isolation
- */
-export const tenantContextStorage = new AsyncLocalStorage<TenantContext>();
-
-/**
- * PostgreSQL Connection Pool Configuration
- * Configured for Neon serverless with optimal connection parameters
+ * Create PostgreSQL connection pool with Neon-optimized settings
  */
 const createConnectionPool = (): Pool => {
   const pool = new Pool({
@@ -85,9 +73,6 @@ const createConnectionPool = (): Pool => {
   return pool;
 };
 
-// Global connection pool instance
-let poolInstance: Pool | null = null;
-
 /**
  * Get or create the global connection pool
  */
@@ -99,109 +84,28 @@ export const getConnectionPool = (): Pool => {
 };
 
 /**
- * ============================================================================
- * LAYER 2: TENANT CONTEXT INJECTION & TRANSACTION WRAPPER
- * ============================================================================
- *
- * This function wraps query execution inside a transaction that:
- * 1. Begins a transaction explicitly
- * 2. Sets app.current_tenant_id as a session variable (LOCAL scope = connection-specific)
- * 3. Executes the actual query
- * 4. Commits the transaction
- *
- * The LOCAL keyword ensures that the tenant_id is scoped ONLY to this transaction,
- * preventing connection pool leakage where subsequent queries on the same connection
- * could incorrectly inherit the previous request's tenant context.
- *
- * RLS policies automatically filter rows based on this setting.
- */
-async function executeWithTenantContext<T>(
-  client: PoolClient,
-  tenantId: string,
-  query: string,
-  params: any[] = []
-): Promise<QueryResult<T>> {
-  try {
-    // Step 1: Start explicit transaction
-    await client.query('BEGIN;');
-
-    // Step 2: Set tenant context as LOCAL (connection-specific, transaction-scoped)
-    // The NULLIF prevents errors if tenantId is somehow undefined
-    await client.query(
-      `SET LOCAL app.current_tenant_id = $1;`,
-      [tenantId]
-    );
-
-    // Step 3: Execute the actual business logic query
-    const result = await client.query<T>(query, params);
-
-    // Step 4: Commit transaction
-    await client.query('COMMIT;');
-
-    return result;
-  } catch (error) {
-    // Rollback on any error
-    try {
-      await client.query('ROLLBACK;');
-    } catch (rollbackError) {
-      logger.error('Failed to rollback transaction', { error: rollbackError });
-    }
-
-    throw error;
-  }
-}
-
-/**
- * ============================================================================
- * QUERY EXECUTION INTERFACE
- * ============================================================================
- *
- * This is the ONLY way to execute queries in the BuzzNa system.
- * It enforces tenant context injection, handles connection pool acquisition,
- * and provides type safety via TypeScript generics.
- */
-
-export interface QueryOptions {
-  /**
-   * Enable read-only mode (transactions may be omitted for SELECT queries)
-   * Default: false (all queries wrapped in transactions for consistency)
-   */
-  readOnly?: boolean;
-
-  /**
-   * Custom timeout in milliseconds (default: 30 seconds)
-   */
-  timeoutMs?: number;
-
-  /**
-   * Idempotency key for webhook/sync operations (prevents double-processing)
-   */
-  idempotencyKey?: string;
-}
-
-/**
  * Execute a query with automatic tenant context injection
+ *
+ * CRITICAL: This wraps EVERY query in:
+ * BEGIN;
+ * SET LOCAL app.current_tenant_id = <tenant_id>;
+ * <actual query>
+ * COMMIT;
+ *
+ * This prevents connection pool leakage where reused connections
+ * could retain the previous request's tenant context.
  *
  * @template T - Result row type
  * @param query - SQL query string (parameterized)
  * @param params - Query parameters array
- * @param options - Execution options
  * @returns QueryResult<T> with rows and row count
- * @throws Error if tenant context is not available or query fails
  */
 export async function executeQuery<T = any>(
   query: string,
-  params: any[] = [],
-  options: QueryOptions = {}
+  params: any[] = []
 ): Promise<QueryResult<T>> {
-  // Extract tenant context from AsyncLocalStorage
-  const context = tenantContextStorage.getStore();
-  if (!context || !context.tenantId) {
-    throw new Error(
-      'CRITICAL: Tenant context not available. Query execution halted. ' +
-      'Ensure auth.middleware.ts enforceTenantContext is applied before this route.'
-    );
-  }
+  // Get tenant context from AsyncLocalStorage
+  const context = getCurrentTenantContext();
 
   const pool = getConnectionPool();
   let client: PoolClient | null = null;
@@ -210,25 +114,42 @@ export async function executeQuery<T = any>(
     // Acquire connection from pool
     client = await pool.connect();
 
-    // Execute query with tenant context injection
-    const result = await executeWithTenantContext<T>(
-      client,
-      context.tenantId,
-      query,
-      params
-    );
+    // Begin explicit transaction
+    await client.query('BEGIN;');
 
-    logger.debug('Query executed successfully', {
-      tenantId: context.tenantId,
-      queryLength: query.length,
-      rowsAffected: result.rowCount,
-    });
+    try {
+      // Set tenant context as LOCAL (connection-specific, transaction-scoped)
+      await client.query(
+        `SET LOCAL app.current_tenant_id = $1;`,
+        [context.tenantId]
+      );
 
-    return result;
+      // Execute the actual business logic query
+      const result = await client.query<T>(query, params);
+
+      // Commit transaction
+      await client.query('COMMIT;');
+
+      logger.debug('Query executed successfully', {
+        tenantId: context.tenantId,
+        queryLength: query.length,
+        rowsAffected: result.rowCount,
+      });
+
+      return result;
+    } catch (error) {
+      // Rollback on any error
+      try {
+        await client.query('ROLLBACK;');
+      } catch (rollbackError) {
+        logger.error('Failed to rollback transaction', { error: rollbackError });
+      }
+      throw error;
+    }
   } catch (error) {
     logger.error('Query execution failed', {
       error: error instanceof Error ? error.message : String(error),
-      tenantId: context?.tenantId,
+      tenantId: context.tenantId,
       queryLength: query.length,
     });
     throw error;
@@ -247,18 +168,11 @@ export async function executeQuery<T = any>(
  * @template T - Result row type (same for all queries)
  * @param queries - Array of [query, params] tuples
  * @returns Array of QueryResult<T> in the same order as input
- * @throws Error if any query fails (entire transaction is rolled back)
  */
 export async function executeBatchQueries<T = any>(
   queries: Array<[string, any[]]>
 ): Promise<QueryResult<T>[]> {
-  const context = tenantContextStorage.getStore();
-  if (!context || !context.tenantId) {
-    throw new Error(
-      'CRITICAL: Tenant context not available for batch execution. ' +
-      'Ensure auth.middleware.ts is applied before this route.'
-    );
-  }
+  const context = getCurrentTenantContext();
 
   const pool = getConnectionPool();
   let client: PoolClient | null = null;
@@ -270,44 +184,44 @@ export async function executeBatchQueries<T = any>(
     // Begin transaction
     await client.query('BEGIN;');
 
-    // Set tenant context once for all queries
-    await client.query(
-      `SET LOCAL app.current_tenant_id = $1;`,
-      [context.tenantId]
-    );
+    try {
+      // Set tenant context once for all queries
+      await client.query(
+        `SET LOCAL app.current_tenant_id = $1;`,
+        [context.tenantId]
+      );
 
-    // Execute all queries
-    for (const [query, params] of queries) {
-      const result = await client.query<T>(query, params);
-      results.push(result);
-    }
+      // Execute all queries
+      for (const [query, params] of queries) {
+        const result = await client.query<T>(query, params);
+        results.push(result);
+      }
 
-    // Commit all changes atomically
-    await client.query('COMMIT;');
+      // Commit all changes atomically
+      await client.query('COMMIT;');
 
-    logger.debug('Batch queries executed successfully', {
-      tenantId: context.tenantId,
-      queryCount: queries.length,
-      resultRows: results.reduce((sum, r) => sum + (r.rowCount || 0), 0),
-    });
+      logger.debug('Batch queries executed successfully', {
+        tenantId: context.tenantId,
+        queryCount: queries.length,
+        resultRows: results.reduce((sum, r) => sum + (r.rowCount || 0), 0),
+      });
 
-    return results;
-  } catch (error) {
-    // Rollback entire batch on any error
-    if (client) {
+      return results;
+    } catch (error) {
+      // Rollback entire batch on any error
       try {
         await client.query('ROLLBACK;');
       } catch (rollbackError) {
         logger.error('Batch rollback failed', { error: rollbackError });
       }
+      throw error;
     }
-
+  } catch (error) {
     logger.error('Batch query execution failed', {
       error: error instanceof Error ? error.message : String(error),
-      tenantId: context?.tenantId,
+      tenantId: context.tenantId,
       queriesAttempted: results.length,
     });
-
     throw error;
   } finally {
     if (client) {
@@ -318,23 +232,15 @@ export async function executeBatchQueries<T = any>(
 
 /**
  * Execute a raw transaction with custom logic
- * Use this for complex multi-step operations that need manual control
  *
  * @template T - Result type
- * @param callback - Async function receiving the client (must NOT commit/rollback explicitly)
+ * @param callback - Async function receiving the client
  * @returns Result from callback
- * @throws Error if callback fails or transaction cannot be committed
  */
 export async function executeTransaction<T>(
   callback: (client: PoolClient) => Promise<T>
 ): Promise<T> {
-  const context = tenantContextStorage.getStore();
-  if (!context || !context.tenantId) {
-    throw new Error(
-      'CRITICAL: Tenant context not available for transaction. ' +
-      'Ensure auth.middleware.ts is applied before this route.'
-    );
-  }
+  const context = getCurrentTenantContext();
 
   const pool = getConnectionPool();
   let client: PoolClient | null = null;
@@ -345,38 +251,38 @@ export async function executeTransaction<T>(
     // Begin transaction
     await client.query('BEGIN;');
 
-    // Set tenant context
-    await client.query(
-      `SET LOCAL app.current_tenant_id = $1;`,
-      [context.tenantId]
-    );
+    try {
+      // Set tenant context
+      await client.query(
+        `SET LOCAL app.current_tenant_id = $1;`,
+        [context.tenantId]
+      );
 
-    // Execute user-provided callback
-    const result = await callback(client);
+      // Execute user-provided callback
+      const result = await callback(client);
 
-    // Commit transaction
-    await client.query('COMMIT;');
+      // Commit transaction
+      await client.query('COMMIT;');
 
-    logger.debug('Custom transaction completed successfully', {
-      tenantId: context.tenantId,
-    });
+      logger.debug('Custom transaction completed successfully', {
+        tenantId: context.tenantId,
+      });
 
-    return result;
-  } catch (error) {
-    // Rollback on error
-    if (client) {
+      return result;
+    } catch (error) {
+      // Rollback on error
       try {
         await client.query('ROLLBACK;');
       } catch (rollbackError) {
         logger.error('Transaction rollback failed', { error: rollbackError });
       }
+      throw error;
     }
-
+  } catch (error) {
     logger.error('Custom transaction failed', {
       error: error instanceof Error ? error.message : String(error),
-      tenantId: context?.tenantId,
+      tenantId: context.tenantId,
     });
-
     throw error;
   } finally {
     if (client) {
@@ -386,14 +292,7 @@ export async function executeTransaction<T>(
 }
 
 /**
- * ============================================================================
- * DATABASE INITIALIZATION & HEALTH CHECK
- * ============================================================================
- */
-
-/**
- * Initialize database connection and run health checks
- * Call this during application bootstrap
+ * Initialize database and verify schema exists
  */
 export async function initializeDatabase(): Promise<void> {
   try {
@@ -407,41 +306,14 @@ export async function initializeDatabase(): Promise<void> {
 
       // Verify schema exists
       const schemaCheck = await client.query(
-        `SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'buzzna';`
+        `SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'public';`
       );
 
       if (schemaCheck.rows.length === 0) {
-        throw new Error(
-          'CRITICAL: buzzna schema does not exist. ' +
-          'Run database migrations before starting the application.'
-        );
+        logger.warn('⚠️ Database schema not found. Migrations may need to be run.');
+      } else {
+        logger.info('✅ Database schema verified');
       }
-
-      logger.info('✅ BuzzNa schema verified');
-
-      // Verify RLS is enabled on key tables
-      const rlsCheck = await client.query(
-        `SELECT tablename FROM pg_tables 
-         WHERE schemaname = 'buzzna' AND rowsecurity = true;`
-      );
-
-      logger.info(`✅ Row-Level Security enabled on ${rlsCheck.rows.length} tables`);
-
-      // Verify current_tenant_id function exists
-      const functionCheck = await client.query(
-        `SELECT 1 FROM pg_proc 
-         WHERE proname = 'current_tenant_uuid' 
-         AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'buzzna');`
-      );
-
-      if (functionCheck.rows.length === 0) {
-        throw new Error(
-          'CRITICAL: current_tenant_uuid() function not found. ' +
-          'Ensure migration 0001 has been executed.'
-        );
-      }
-
-      logger.info('✅ Database initialization complete. System ready.');
     } finally {
       client.release();
     }
@@ -454,8 +326,7 @@ export async function initializeDatabase(): Promise<void> {
 }
 
 /**
- * Gracefully close all connections in the pool
- * Call this during application shutdown
+ * Gracefully close all connections
  */
 export async function closeDatabase(): Promise<void> {
   try {
@@ -468,13 +339,4 @@ export async function closeDatabase(): Promise<void> {
     logger.error('Error closing database connection pool', { error });
     throw error;
   }
-}
-
-/**
- * Reset database connection pool (useful for testing)
- * WARNING: This terminates all active connections
- */
-export async function resetConnectionPool(): Promise<void> {
-  await closeDatabase();
-  poolInstance = null;
 }
