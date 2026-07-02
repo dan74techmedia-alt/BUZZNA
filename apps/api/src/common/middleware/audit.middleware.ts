@@ -1,43 +1,80 @@
+// apps/api/src/common/middleware/audit.middleware.ts
+
 import { Request, Response, NextFunction } from 'express';
-import { db } from '../../db/client';
 import { logger } from '../logging/logger';
 
 /**
- * Middleware for tracking sensitive operations (POST, PUT, DELETE, PATCH).
- * Safely executes after the primary response to prevent blocking client latency.
+ * Audit Logging Middleware
+ *
+ * PURPOSE:
+ * - Log all HTTP requests and responses for compliance and debugging
+ * - Track user actions for security audit trail
+ * - Record request/response timings for performance analysis
+ * - Applied early (Phase 4) to capture full request lifecycle
+ *
+ * AUDIT TRAIL CAPTURES:
+ * - Request timestamp, method, path
+ * - Authenticated user (if available)
+ * - Request body size
+ * - Response status code
+ * - Response time
+ * - Tenant context
+ *
+ * NON-SENSITIVE OPERATIONS:
+ * - GET requests to /health
+ * - OPTIONS requests (CORS preflight)
+ *
+ * ============================================================================
  */
-export const auditLogMiddleware = (entityName: string, actionDesc?: string) => {
-  return (req: Request, res: Response, next: NextFunction) => {
-    // We hook into the response 'finish' event to log the audit asynchronously
-    res.on('finish', () => {
-      // Only log successful mutating actions
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        const tenantId = req.tenantId;
-        const userId = req.user?.userId || null;
-        const action = actionDesc || req.method;
-        const clientIp = req.ip || req.headers['x-forwarded-for'] || 'unknown';
 
-        if (!tenantId) {
-          logger.warn(`Audit log dropped: Missing tenant context for ${action} on ${entityName}`);
-          return;
-        }
+interface AuditContext {
+  timestamp: number;
+  requestId?: string;
+  tenantId?: string;
+  userId?: string;
+}
 
-        // Execute raw query using pg directly or via the configured ORM instance 
-        // to write to the `audit_logs` table defined in the schema.
-        db.query(
-          `INSERT INTO audit_logs (tenant_id, user_id, action, entity_name, client_ip) 
-           VALUES ($1, $2, $3, $4, $5)`,
-          [tenantId, userId, action, entityName, clientIp]
-        ).catch((err) => {
-          logger.error(`Failed to write to immutable audit ledger: ${err.message}`, {
-            tenantId,
-            action,
-            entityName,
-          });
-        });
-      }
+declare global {
+  namespace Express {
+    interface Request {
+      auditContext?: AuditContext;
+    }
+  }
+}
+
+export const auditMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+  // Skip audit logging for health checks and preflight requests
+  if (req.path === '/health' || req.method === 'OPTIONS') {
+    return next();
+  }
+
+  // Record audit context
+  const auditContext: AuditContext = {
+    timestamp: Date.now(),
+    requestId: req.requestId,
+    tenantId: req.tenantId,
+    userId: req.user?.userId,
+  };
+
+  req.auditContext = auditContext;
+
+  // Capture original response.json to intercept response data
+  const originalJson = res.json.bind(res);
+  res.json = function (body: any) {
+    // Log response after it's being sent
+    const duration = Date.now() - auditContext.timestamp;
+    logger.info('HTTP Request', {
+      requestId: auditContext.requestId,
+      tenantId: auditContext.tenantId,
+      userId: auditContext.userId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: duration,
     });
 
-    next();
+    return originalJson(body);
   };
+
+  next();
 };

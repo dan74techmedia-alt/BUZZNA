@@ -1,38 +1,46 @@
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { env } from '../../config/env';
+// apps/api/src/common/tenant-context.ts
 
-export interface AuthenticatedRequest extends Request {
-  user?: {
-    userId: string;
-    tenantId: string;
-    roleId: string;
-  };
+import { AsyncLocalStorage } from 'async_hooks';
+
+/**
+ * Tenant context object stored in AsyncLocalStorage
+ * Ensures proper tenant isolation across async boundaries
+ */
+export interface TenantContextData {
+  tenantId: string;
+  userId: string;
+  roleId: string;
 }
 
-export const enforceTenantContext = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const authHeader = req.headers.authorization;
+/**
+ * Global AsyncLocalStorage instance for tenant context
+ * CRITICAL: This is the SINGLE SOURCE OF TRUTH for tenant isolation
+ * All database queries must read from this context via tenantContextStorage.getStore()
+ */
+export const tenantContextStorage = new AsyncLocalStorage<TenantContextData>();
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid authorization header.' });
+/**
+ * Helper to run code within a tenant context
+ * Used by middleware to wrap request handlers
+ */
+export function runWithTenantContext<T>(
+  context: TenantContextData,
+  callback: () => Promise<T>
+): Promise<T> {
+  return tenantContextStorage.run(context, callback);
+}
+
+/**
+ * Helper to get current tenant context
+ * Throws error if context is not available (safeguard)
+ */
+export function getCurrentTenantContext(): TenantContextData {
+  const context = tenantContextStorage.getStore();
+  if (!context) {
+    throw new Error(
+      'CRITICAL: Tenant context not available. ' +
+      'Ensure auth.middleware.ts has been applied before this route.'
+    );
   }
-
-  const token = authHeader.split(' ')[1];
-
-  try {
-    // Cryptographically verify the signature using the environment secret
-    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as any;
-
-    // Attach verified claims to the internal request object
-    // Client-supplied tenant headers are completely ignored
-    req.user = {
-      userId: decoded.userId,
-      tenantId: decoded.tenantId,
-      roleId: decoded.roleId,
-    };
-
-    next();
-  } catch (error) {
-    return res.status(403).json({ error: 'Token verification failed. Access denied.' });
-  }
-};
+  return context;
+}
