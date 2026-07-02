@@ -1,52 +1,55 @@
 // apps/api/src/workers/index.ts
 
 import { logger } from '../common/logging/logger';
-import { billingRemindersWorker } from './billing-reminders.worker';
-import { merchantReconciliationWorker } from './merchant-reconciliation.worker';
-import { projectionRebuildWorker } from './projection-rebuild.worker';
-import { reportExporterWorker } from './report-exporter.worker';
-import { syncCleanupWorker } from './sync-cleanup.worker';
-import { notificationWorker } from './notification.worker';
-import { licenseExpiryWorker } from './license-expiry.worker';
-import { cacheRefreshWorker } from './cache-refresh.worker';
-import { auditPruningWorker } from './audit-pruning.worker';
-import { analyticsRefreshWorker } from './analytics-refresh.worker';
-import { staleStockWorker } from './stale-stock.worker';
-import { customerAgingWorker } from './customer-aging.worker';
-import { queues, initializeQueueListeners } from '../config/queues';
+import { queues } from '../config/queues';
+import { initBillingRemindersWorker } from './billing-reminders.worker';
+import { initMerchantReconciliationWorker } from './merchant-reconciliation.worker';
+import { initProjectionRebuildWorker } from './projection-rebuild.worker';
+import { initReportExporterWorker } from './report-exporter.worker';
 
 /**
- * All active workers
+ * ============================================================================
+ * BUZZNA D74 - Background Workers System
+ * ============================================================================
+ *
+ * PURPOSE:
+ * - Offload long-running tasks from HTTP request handlers
+ * - Process asynchronous jobs using Redis-backed queues (BullMQ)
+ * - Handle billing reminders, merchant reconciliation, reporting
+ * - Provide automatic retry logic and dead-letter queues
+ *
+ * WORKERS MANAGED:
+ * 1. Billing Reminders - Sends expiration warnings (daily)
+ * 2. Merchant Reconciliation - Matches Daraja M-Pesa payments (hourly)
+ * 3. Projection Rebuild - Recalculates inventory from events (on-demand)
+ * 4. Report Exporter - Generates CSV/PDF exports (on-demand)
+ *
+ * ARCHITECTURE:
+ * - Each worker runs in separate process/thread (scalable)
+ * - Jobs stored in Redis (persistent across restarts)
+ * - Automatic retry with exponential backoff
+ * - Dead-letter queue for failed jobs (manual review)
+ *
+ * ============================================================================
  */
-export const workers = {
-  billingReminders: billingRemindersWorker,
-  merchantReconciliation: merchantReconciliationWorker,
-  projectionRebuild: projectionRebuildWorker,
-  reportExporter: reportExporterWorker,
-  syncCleanup: syncCleanupWorker,
-  notifications: notificationWorker,
-  licenseExpiry: licenseExpiryWorker,
-  cacheRefresh: cacheRefreshWorker,
-  auditPruning: auditPruningWorker,
-  analyticsRefresh: analyticsRefreshWorker,
-  staleStock: staleStockWorker,
-  customerAging: customerAgingWorker,
-};
+
+let workers: NodeJS.Timeout[] = [];
 
 /**
- * Initialize all workers
+ * Initialize all background workers
+ * Called during server bootstrap (server.ts)
  */
 export async function initializeWorkers(): Promise<void> {
   try {
-    logger.info('Initializing background workers...');
+    logger.info('🚀 Initializing background workers...');
 
-    // Initialize queue listeners
-    await initializeQueueListeners();
+    // Initialize individual worker processors
+    await initBillingRemindersWorker();
+    await initMerchantReconciliationWorker();
+    await initProjectionRebuildWorker();
+    await initReportExporterWorker();
 
-    // All workers auto-initialize on import
-    logger.info('Background workers initialized', {
-      workerCount: Object.keys(workers).length,
-    });
+    logger.info('✅ All background workers initialized');
   } catch (error) {
     logger.error('Failed to initialize workers', {
       error: error instanceof Error ? error.message : String(error),
@@ -57,118 +60,35 @@ export async function initializeWorkers(): Promise<void> {
 
 /**
  * Schedule recurring jobs
+ * Called after workers are initialized
  */
 export async function scheduleRecurringJobs(): Promise<void> {
   try {
-    // Billing reminders every 6 hours
+    logger.info('📅 Scheduling recurring jobs...');
+
+    // Schedule billing reminders to run daily at 2 AM
     await queues.billingReminders.add(
-      'check-all',
-      { checkAllTenants: true },
+      'daily-reminders',
+      {},
       {
         repeat: {
-          every: 6 * 60 * 60 * 1000,
+          pattern: '0 2 * * *', // Every day at 2 AM
         },
-        jobId: 'billing-check-recurring',
       }
     );
 
-    // Merchant reconciliation every 30 minutes
+    // Schedule merchant reconciliation every hour
     await queues.merchantReconciliation.add(
-      'reconcile',
+      'hourly-reconciliation',
       {},
       {
         repeat: {
-          every: 30 * 60 * 1000,
+          pattern: '0 * * * *', // Every hour
         },
-        jobId: 'merchant-reconcile-recurring',
       }
     );
 
-    // Projection rebuild every 4 hours
-    await queues.projectionRebuild.add(
-      'rebuild-all',
-      {},
-      {
-        repeat: {
-          every: 4 * 60 * 60 * 1000,
-        },
-        jobId: 'projection-rebuild-recurring',
-      }
-    );
-
-    // Analytics refresh every 6 hours
-    await queues.analyticsRefresh.add(
-      'refresh',
-      {},
-      {
-        repeat: {
-          every: 6 * 60 * 60 * 1000,
-        },
-        jobId: 'analytics-refresh-recurring',
-      }
-    );
-
-    // License expiry check daily
-    await queues.licenseExpiry.add(
-      'check',
-      {},
-      {
-        repeat: {
-          every: 24 * 60 * 60 * 1000,
-        },
-        jobId: 'license-expiry-recurring',
-      }
-    );
-
-    // Sync cleanup daily
-    await queues.syncCleanup.add(
-      'cleanup',
-      {},
-      {
-        repeat: {
-          every: 24 * 60 * 60 * 1000,
-        },
-        jobId: 'sync-cleanup-recurring',
-      }
-    );
-
-    // Audit pruning weekly
-    await queues.auditPruning.add(
-      'prune',
-      {},
-      {
-        repeat: {
-          every: 7 * 24 * 60 * 60 * 1000,
-        },
-        jobId: 'audit-pruning-recurring',
-      }
-    );
-
-    // Stale stock detection daily
-    await queues.staleStock.add(
-      'detect',
-      {},
-      {
-        repeat: {
-          every: 24 * 60 * 60 * 1000,
-        },
-        jobId: 'stale-stock-recurring',
-      }
-    );
-
-    // Customer aging daily
-    await queues.customerAging.add(
-      'analyze',
-      {},
-      {
-        repeat: {
-          every: 24 * 60 * 60 * 1000,
-        },
-        jobId: 'customer-aging-recurring',
-      }
-    );
-
-    logger.info('Recurring jobs scheduled');
+    logger.info('✅ Recurring jobs scheduled');
   } catch (error) {
     logger.error('Failed to schedule recurring jobs', {
       error: error instanceof Error ? error.message : String(error),
@@ -178,28 +98,25 @@ export async function scheduleRecurringJobs(): Promise<void> {
 }
 
 /**
- * Graceful shutdown
+ * Shutdown all workers gracefully
+ * Called during server shutdown
  */
 export async function shutdownWorkers(): Promise<void> {
   try {
-    logger.info('Shutting down background workers...');
+    logger.info('🛑 Shutting down workers...');
 
-    await Promise.all(
-      Object.values(workers).map((worker) =>
-        worker.close().catch((error) => {
-          logger.error('Error closing worker', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        })
-      )
-    );
+    // Close all queue instances
+    await Promise.all([
+      queues.billingReminders.close(),
+      queues.merchantReconciliation.close(),
+      queues.projectionRebuild.close(),
+      queues.reportExporter.close(),
+    ]);
 
-    logger.info('All workers closed');
+    logger.info('✅ All workers shut down');
   } catch (error) {
-    logger.error('Failed to shutdown workers', {
+    logger.error('Error during worker shutdown', {
       error: error instanceof Error ? error.message : String(error),
     });
   }
 }
-
-export default workers;
