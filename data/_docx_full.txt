@@ -1,0 +1,1428 @@
+
+
+BUZZNA D74 ENTERPRISE OPERATING SYSTEM
+
+Comprehensive Architectural Blueprint & System Analysis
+
+Version: 1- Production-Ready Lock DocumentPrepared By: Daniel Githinji (Systems Architect)Date Generated: June 29, 2026System Status: Production, Offline-First Multi-Tenant Cloud/Local OS
+
+
+
+Table of Contents
+
+
+
+
+
+
+
+1. Project Overview & System Vision
+
+BuzzNa D74 is engineered as an offline-first intelligent business operating system specifically tailored for micro, small, and medium enterprises (MSMEs) operating in sub-Saharan Africa and analogous emerging markets. Traditional SaaS and POS platforms fundamentally fail these businesses because they operate on flawed assumptions: constant cloud connectivity, stable municipal electricity, high formal digital literacy, and expensive monthly subscriptions.
+
+BuzzNa D74 completely upends this paradigm by serving as a comprehensive business memory and action engine, a low-cost digital control center, and a proactive shop assistant. The primary architectural milestone of BuzzNa D74 is to minimize administrative overhead to achieve a state of 'zero attendance' operations, meaning cashiers, attendants, and business owners spend near-zero effort operating the software.
+
+1.1 Target Business Segments & Onboarding Tailoring
+
+Retail Shops & Wholesalers: Requires high-velocity barcode scanning, bulk break price tiers, variable dimensions, and swift payment-to-sale matching.
+
+Butcheries: Demands precise decimal fractional units (grams up to three decimal indices), perishable batch tracking, historical buying cost variation logs, and automated spoilage account routing.
+
+Mitumba (Apparel): Requires itemized identity stock tags, haggle margin validation guards, open-bale cost-averaging, and real-time dispatch alerts.
+
+Hardware Stores & Agrovets: Strict serialization cross-referencing, manufacturer catalogs, legal compliance expiration trackers, low-stock threshold triggers, and extensive supplier credit frameworks.
+
+Cyber Cafes: Time-slot calendar reservations, hourly service fee algorithms, non-physical resource indices, and recurring utility bill cost trackers.
+
+2. Architectural Principles & Technology Stack
+
+To guarantee enterprise-grade data integrity and production safety under challenging operational environments, the platform strictly enforces the following core architectural rules:
+
+Offline-First & Local-Authority: Terminals must perform local validation lookups, write data states locally via IndexedDB (Dexie), and queue synchronizations asynchronously without blocking active checkouts.
+
+Authoritative Ledger Sourcing: Inventory integer/decimal fields must never be manipulated directly via update queries. Stock levels are calculated dynamically via sequential aggregation over immutable tracking rows.
+
+Absolute Separation of Payment Domains: Platform billing fees (via Paystack) must never mix with client merchant operational transactions (via Daraja M-Pesa).
+
+History Preservation: Financial rows and event streams are strictly append-only. Deleting records is strictly banned. Error correction relies exclusively on compensating entries like voids, refunds, and reversals.
+
+Strict Tenant Isolation: Every database statement, cached value, and background execution must evaluate row permissions based on the user's bound token.
+
+Decimal Integrity: All monetary amounts must use exact decimal/numeric types (NUMERIC(15,2) or NUMERIC(12,2)), never floating point.
+
+2.1 Technology Stack
+
+Frontend Client Layer: React + Vite PWA + TypeScript + TanStack Query + React Router. Local offline storage powered by IndexedDB via Dexie.
+
+Backend API Layer: Node.js + TypeScript + Express.js modular monolith.
+
+Database Engine: PostgreSQL 16+ using Drizzle ORM or Kysely for type-safe compile-time queries, utilizing native PostgreSQL Row-Level Security (RLS).
+
+Asynchronous Queues: Redis + BullMQ handles asynchronous background jobs, transactional retries, and report compilation.
+
+External Integrations: Paystack API for platform subscription handling and Safaricom Daraja M-Pesa API for client-facing retail revenue collection.
+
+2.2 Monorepo Directory Blueprint
+
+buzzna-d74/├── apps/│   ├── api/                     # Backend Modular Monolith Root│   │   └── src/│   │       ├── bootstrap/       # Cluster initialization vectors, load-env.ts, server.ts│   │       ├── config/          # Environment definitions, DB pools, Redis/Paystack configs│   │       ├── common/          # Global exception filters, context guards, auth middleware│   │       ├── db/              # Raw migrations, seed scripts, materialized views│   │       ├── modules/         # Encapsulated Domain Component Modules (auth, catalog, sales, etc.)│   │       ├── workers/         # BullMQ processors (projection rebuilds, billing reminders)│   │       └── tests/           # Unit, Integration, e2e testing suites│   └── web/                     # Frontend React PWA Client│       └── src/│           ├── components/      # Shared Atomic elements design library│           ├── features/        # Isolated functional feature blocks│           ├── offline/         # IndexedDB configuration and Dexie sync queue controllers│           └── pages/, store/, hooks/└── packages/                    # Shared code packages (types, validation utilities)
+
+3. Domain Isolation & Capability Map
+
+The core domains are isolated behind strict architectural boundaries to prevent dependency tangles. Each module within the monolith owns its specific database entities and must adhere to strict boundary rules:
+
+Module Domain
+
+Core Data Entities Owned
+
+Strict Architectural Boundary Restriction
+
+auth
+
+refresh_tokens, otp_codes, trusted_devices
+
+Must never read or alter tenant subscription plans or payment rules.
+
+tenancy
+
+businesses, business_settings
+
+Owns configuration snapshots; must never intercept active checkout sales logs.
+
+rbac
+
+roles, role_permissions
+
+Provides authorization middleware vectors; completely isolated from transaction code.
+
+catalog
+
+product_categories, products
+
+Owns item listings; completely banned from executing stock ledger math.
+
+inventory
+
+inventory_events, stock_counts
+
+Absolute authority for item availability; operates independently of billing status.
+
+sales
+
+sales, sale_items, allocations
+
+Processes checkout manifests; cannot write to platform subscription tables.
+
+till
+
+till_sessions
+
+Tracks physical cash verification; must not edit customer ledgers or credit lines.
+
+expenses
+
+expense_categories, expenses
+
+Logs capital outflow; strictly restricted from altering catalog pricing attributes.
+
+customers
+
+customers, customer_credit_ledger
+
+Owns neighborhood credit debt books; decoupled from supplier ledgers.
+
+suppliers
+
+suppliers, supplier_transactions
+
+Owns B2B supply lines; cannot read consumer credit accounts.
+
+billing
+
+subscription_plans, invoices, payments
+
+Owns Paystack monetization variables; strictly banned from storing client M-Pesa keys.
+
+merchant-payments
+
+connections, merchant_payments, matches
+
+Encrypts Daraja keys; handles client revenue reconciliation; isolated from SaaS fees.
+
+sync
+
+sync_batches, sync_events
+
+Manages idempotent packet ingestion; cannot modify application validation logic.
+
+analytics
+
+materialized views, attention_card_events
+
+Compiles daily/weekly trends and alert heuristics; strict read-only footprint.
+
+audit-security
+
+audit_logs, security_events
+
+Append-only system security ledger; globally and cryptographically immutable.
+
+4. Multi-Tenant Security & Role-Based Access (RBAC)
+
+BuzzNa D74 implements a cost-efficient single-database, shared-schema multi-tenant model protected by a comprehensive dual-layer security framework.
+
+4.1 Layer 1: Middleware Context Enforcement
+
+Incoming HTTP requests pass through isolated middleware that unpacks the Bearer JWT, validates the cryptographic signature using the JWT_ACCESS_SECRET, and extracts the tenant_id UUID from payload claims. It attaches this value directly to the internal request context, explicitly ignoring client-supplied headers (e.g., X-Tenant-ID) to neutralize tampering vulnerabilities.
+
+4.2 Layer 2: Database Row-Level Security & Connection Pool Integrity
+
+PostgreSQL Row-Level Security (RLS) policies are activated across all tables. Because connections are reused in connection poolers (like PgBouncer), every database query MUST wrap the tenant scoping command and the actual database operation inside a strict transaction block:
+
+BEGIN;SET LOCAL app.current_tenant_id = 'uuid_here';-- Execute real database query statements hereCOMMIT;
+
+4.3 Role-Based Access Control (RBAC) Matrix
+
+Action Element
+
+Owner
+
+Manager
+
+Cashier
+
+Accountant
+
+View Live Dashboard
+
+Yes
+
+Yes
+
+Yes
+
+Yes
+
+Modify Platform Billing
+
+Yes
+
+No
+
+No
+
+No
+
+Manage System Staff Accounts
+
+Yes
+
+Limited
+
+No
+
+No
+
+Create / Edit Product Catalog
+
+Yes
+
+Yes
+
+No
+
+No
+
+Manual Stock Inventory Adjust
+
+Yes
+
+Yes
+
+No
+
+No
+
+Approve Shelf Verification Counts
+
+Yes
+
+Yes
+
+No
+
+No
+
+Record Frontline Sale Entries
+
+Yes
+
+Yes
+
+Yes
+
+Optional
+
+Void or Refund a Completed Sale
+
+Yes
+
+Policy Enforced
+
+No
+
+No
+
+Commit Expense Adjustments
+
+Yes
+
+Yes
+
+Limited
+
+Yes
+
+Manage Supplier Accounts
+
+Yes
+
+Yes
+
+No
+
+Yes
+
+Export Ledger Financial Analytics
+
+Yes
+
+Yes
+
+No
+
+Yes
+
+4.4 Shift Accountability & Handover Rules
+
+Single Active Session: A Cashier can only have exactly one open till session active simultaneously.
+
+Blind Balance Discrepancy Gate: At shift handover, the system presents a blind entry text input for the physical cash balance. The expected balance (Opening Float + Cash Revenue - Cash Outflows) is hidden from the cashier.
+
+Lockout: If the physical entry variance exceeds limits, the session is flagged as REVIEW_REQUIRED, instantly locking checkout routes for that cashier and raising a high-priority attention card.
+
+5. Master Database Documentation & Schemas
+
+The database architecture is built iteratively using raw, sequential SQL migrations based on PostgreSQL 16+. All tables implement tenant_id foreign keys and RLS triggers.
+
+Table: businesses
+
+Column Name
+
+Data Type / Nullability
+
+Default / Constraints / Description
+
+tenant_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+legal_name
+
+character varying
+
+Business formal name
+
+trade_name
+
+character varying
+
+DBA brand name
+
+license_status
+
+license_status_enum
+
+'TRIAL_ACTIVE'
+
+license_expires_at
+
+timestamptz
+
+now() + 14 days
+
+
+
+Table: users
+
+Column Name
+
+Data Type / Nullability
+
+Default / Constraints / Description
+
+user_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+role_id
+
+uuid
+
+Foreign Key
+
+username
+
+character varying
+
+Unique username
+
+password_hash
+
+character varying
+
+Argon2id / Bcrypt string
+
+phone_number
+
+character varying
+
+MSISDN format
+
+
+
+Table: products
+
+Column Name
+
+Data Type / Nullability
+
+Default / Constraints / Description
+
+product_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+barcode
+
+character varying
+
+EAN/UPC identifier
+
+cost_floor
+
+numeric(12,2)
+
+Minimum allowed sale price
+
+retail_price
+
+numeric(12,2)
+
+Base retail price
+
+current_quantity
+
+numeric(15,3)
+
+Cached projection
+
+
+
+Table: inventory_events
+
+Column Name
+
+Data Type / Nullability
+
+Default / Constraints / Description
+
+event_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+product_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+event_type
+
+character varying
+
+STOCK_ADD, SALE_DISPATCH, etc
+
+reason_code
+
+character varying
+
+SPOILAGE, DAMAGE, THEFT_LOSS
+
+quantity_delta
+
+numeric(15,3)
+
+Stock change amount
+
+
+
+Table: sales_transactions
+
+Column Name
+
+Data Type / Nullability
+
+Default / Constraints / Description
+
+transaction_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+session_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+payment_method
+
+character varying
+
+CASH, MPESA, DEBT
+
+payment_status
+
+character varying
+
+PENDING, COMPLETED_VERIFIED, REFUNDED
+
+gross_total
+
+numeric(12,2)
+
+Final monetary total
+
+
+
+Table: till_sessions
+
+Column Name
+
+Data Type / Nullability
+
+Default / Constraints / Description
+
+session_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+user_id
+
+uuid (NOT NULL)
+
+Foreign Key
+
+opening_float
+
+numeric(12,2)
+
+Initial cash drawer float
+
+expected_cash
+
+numeric(12,2)
+
+System calculated
+
+actual_cash_entered
+
+numeric(12,2)
+
+Cashier physical entry
+
+
+
+5.1 High-Performance Indexing Strategy
+
+Multi-tenant queries rely on rapid lookup filters to ensure one business cannot experience latency spikes caused by data volume changes in another business's workspace. Composite database indexes are structured to prioritize tenant queries:
+
+CREATE INDEX idx_products_tenant_barcode ON products (tenant_id, barcode);CREATE INDEX idx_inventory_events_sync ON inventory_events (tenant_id, terminal_timestamp DESC);CREATE INDEX idx_sales_transactions_sync ON sales_transactions (tenant_id, terminal_timestamp DESC);CREATE INDEX idx_sale_items_tx ON sale_items (transaction_id);
+
+6. Backend API Contracts & Validation
+
+The backend modular monolith communicates exclusively via JSON payloads. All non-auth endpoints require a Bearer JWT passed in the Authorization header. Incoming requests are parsed against strict compile-time TypeScript Zod schemas before hitting the business logic layer.
+
+Endpoint Route
+
+HTTP Method
+
+Purpose & Constraints
+
+/api/v1/auth/register-business
+
+POST
+
+Create tenant, root owner user, and start initial 14-day trial.
+
+/api/v1/auth/login
+
+POST
+
+Authenticate user, returns JWT tokens and offline sync snapshot.
+
+/api/v1/auth/refresh
+
+POST
+
+Rotate short-lived access token using long-lived secure refresh token.
+
+/api/v1/business/me
+
+GET
+
+Fetch active business profile and SaaS entitlement snapshot parameters.
+
+/api/v1/products
+
+POST
+
+Create catalog item. Requires catalog.manage permission rule.
+
+/api/v1/inventory/restocks
+
+POST
+
+Append bulk stock items restock event into the authoritative log.
+
+/api/v1/tills/open
+
+POST
+
+Open physical till session by providing a starting float amount.
+
+/api/v1/sales
+
+POST
+
+Finalize checkout manifest (writes header, items, and allocations simultaneously).
+
+/api/v1/sales/:id/refund
+
+POST
+
+Process structural partial or full sale item return refunds.
+
+/api/v1/billing/paystack/initiate
+
+POST
+
+Start corporate BuzzNa billing monetization pipelines.
+
+/api/v1/merchant-payments/:id/match
+
+POST
+
+Manually map unmatched Daraja M-Pesa records to a checkout sale.
+
+/api/v1/sync/batches
+
+POST
+
+Upload offline replication packet array from terminal storage stores.
+
+7. Core Business Logic & State Machines
+
+7.1 Authoritative Event-Sourced Inventory Engine
+
+BuzzNa D74 strictly prohibits direct alterations to current stock levels. The system utilizes a pure event-sourced stock valuation engine to maintain absolute historical integrity.
+
+The Ground Truth Ledger: The authoritative source for all stock availability is the immutable inventory_events table. Every operational action (restock, sale dispatch, physical count) appends a new event row. The current_quantity field in the products table is strictly treated as a cached projection for UI rendering.
+
+7.2 The Master Refund & Inventory Restoration Recipe
+
+To preserve audit history, direct deletion of sales rows is strictly prohibited. Error correction follows this sequence:
+
+Verify Tenant Boundary: Load the target transaction record and assert it matches the authenticated context.
+
+State Duplication Check: Ensure it has not already been fully refunded or voided.
+
+Refund Record Insertion: Insert an un-deletable tracking row into the sale_refunds table.
+
+Inventory Restoration: If physical products are returned, append a new tracking row to inventory_events categorized as REFUND_RETURN with a positive quantity delta.
+
+Ledger Reconciliation: Adjust customer debt books (if applicable) and write to the system security ledger.
+
+7.3 License Enforcement & Lockdown Middleware
+
+License Status
+
+Operational Scope Rules
+
+TRIAL_ACTIVE
+
+Grants full execution access across all application components, with sync tasks allowed.
+
+PAYMENT_DUE / GRACE_PERIOD
+
+Operational writes remain active for a window of 3 calendar days.
+
+SUSPENDED_NON_PAYMENT
+
+Enforces a strict read-only lock. POS writes, inventory logs, and cash flows are completely blocked. Analytics remain available.
+
+FULLY_ACTIVATED
+
+Grants perpetual structural core access. Subscription checks bypassed.
+
+8. Offline-First Synchronization Engine
+
+Terminals operate at zero-latency against IndexedDB cache stores powered by Dexie.js during internet blackouts.
+
+8.1 Component Client Store Architecture
+
+To prevent storage crashes on lower-end Android devices for businesses with massive catalogs (10,000+ SKUs), the products_cache and customers_cache employ a Least Recently Used (LRU) caching strategy. Full offline caching is strictly limited to the top 80% fastest-moving inventory items.
+
+Local Cache Store Table
+
+Functional Offline Purpose
+
+products_cache
+
+Full stock metadata listings for zero-latency local lookups and instant barcode matching.
+
+customers_cache
+
+Local customer profile mappings to handle community credit tracking offline.
+
+business_snapshot
+
+Stores cryptographically signed server license states to enforce feature lockdowns locally.
+
+sync_queue
+
+Outbound sequential pipeline holding local transaction logs chronologically until sync occurs.
+
+sync_history
+
+Replication trace indices mapping successful transfers and historical server rejection error codes.
+
+current_till_session
+
+Active shift physical cash float metrics locally bound to prevent multi-cashier crossing.
+
+8.2 The "Walkaway" Sync Conflict Protocol
+
+If a terminal syncs an offline cash sale resulting in negative inventory (e.g., another terminal depleted the stock during a network dropout), the server MUST NEVER reject the cash transaction. Rejecting it breaks physical cash drawer balance since the goods have already walked away with the customer. Instead, the server accepts the sale, drops stock to negative integers, and flags an 'Inventory Anomaly' attention card.
+
+8.3 Offline M-Pesa Paradox Mitigation
+
+Safaricom Daraja requires cloud webhooks. To support offline checkouts seamlessly, an Android background service intercepts local 'MPESA' SMS receipts, parsing them temporarily into IndexedDB to validate payments locally before eventual cloud sync and authoritative reconciliation.
+
+9. Performance, Scalability & Analytics
+
+9.1 Distributed Background Workers (Redis + BullMQ)
+
+Heavy data mutations and cron schedules are delegated to dedicated background processing queues:
+
+Subscription Reminders: Evaluates tenant expiration dates and distributes automated alerts.
+
+Merchant Reconciliation: Sweeps unlinked transaction pools to pair orphaned Safaricom M-Pesa receipts with pending POS checkouts.
+
+Projection Rebuilder: Scans the immutable inventory_events ledger and recomputes the current_quantity cached values from scratch for integrity.
+
+Report Exporter: Compiles dense CSV and PDF financial statement exports asynchronously.
+
+9.2 Materialized Database Views
+
+To prevent complex queries from locking transactional tables, the analytics engine reads exclusively from pre-compiled materialized views:
+
+Materialized View Name
+
+Target Core Analytics Metric Calculated
+
+mv_daily_sales_summary
+
+Tracks gross sales, net profits, and individual payment channel revenues.
+
+mv_customer_debt_aging
+
+Organizes outstanding neighborhood debt into 0-7, 8-30, and 30+ days overdue tracking buckets.
+
+mv_product_velocity
+
+Computes inventory transaction speed metrics to isolate top-performing products and drive client-side LRU cache retention rules.
+
+mv_stale_capital_audit
+
+Flags slow-moving stock lines with zero transactions for 45+ days.
+
+10. Security Audit, Bugs & Vulnerabilities Analysis
+
+A comprehensive source code and architectural audit highlights critical engineering rules necessary to prevent severe vulnerabilities:
+
+Connection Pool Leakage Prevention: In backends using PgBouncer, failing to wrap connection settings inside an explicit transaction block allows reused pool sockets to retain the previous tenant's ID context. Fix: Mandate strict `BEGIN; SET LOCAL app.current_tenant_id... COMMIT;` transaction encapsulation for every query.
+
+Device Clock Tampering: Malicious operators can change mobile device clocks backward to forge historical sales records and bypass subscription expiration dates. Fix: The server evaluates event timestamps against server suspension logs and rejects back-dated writes into the `sync_rejections` queue.
+
+Zero Client-Side Trust: Never trust the client browser for permission checks, tenant scope, or calculation totals. Financial rows and event streams must be re-validated on the backend monolith using server-side ledger states.
+
+Idempotency Guards: Webhooks utilize provider tracking tokens as idempotency keys. This prevents double-crediting a tenant's account during network retries or Paystack/Daraja redeliveries.
+
+API Rate Limiting: Strict token-bucket algorithms on /auth (5 req/min) to prevent brute force, and /sync (10 req/5min) to prevent offline clients from getting stuck in synchronization loops that DDoS the central server.
+
+11. Deployment Strategy & Infrastructure Guide
+
+To realize the highly scalable architecture of BuzzNa D74, deployment of the decoupled systems must follow explicit environment configurations:
+
+11.1 Database Architecture (Neon PostgreSQL)
+
+The shared-schema multi-tenant relational database is heavily reliant on connection pooling to handle massive offline-sync batch requests. This infrastructure maps perfectly to Neon PostgreSQL. Neon's serverless edge computing and native connection pooling ensures that the mandatory tenant context injection executes seamlessly without exhausting database sockets during peak retail hours.
+
+11.2 Backend Monolith Pipeline (GitHub to Render)
+
+The Node.js API monolith should be deployed directly from the GitHub repository onto Render. Render's automated build pipelines instantly compile the TypeScript source, while its native support for Background Workers provides an ideal hosting environment for the BullMQ/Redis async processors.
+
+11.3 Android APK Preparation (Capacitor/Cordova)
+
+To transition the React PWA into a standalone Android APK suitable for low-end mobile devices in open-air markets, the system utilizes a hybrid container architecture:
+
+Webview Wrapper: Capacitor.js or Apache Cordova wraps the compiled React/Vite build folder into a native Android Studio project.
+
+Native Android Service: A background Java/Kotlin service worker is embedded into the APK to register a BroadcastReceiver. This receiver listens for incoming system SMS alerts to intercept and parse 'MPESA' sender codes locally.
+
+Peripheral Interfacing: Hardware integration layers use Capacitor-Community plugins to establish serial communication with bluetooth thermal printers and embedded hardware barcode scanners.
+
+12. End-to-End Development Roadmap
+
+To implement BuzzNa D74, code generation must follow a strict, dependency-driven sequence. Foundational security and database layers must be locked in before a single line of frontend UI is written.
+
+Phase 0: Project Scaffolding & Shared Monorepo Setup
+
+Initialize the workspace (Turborepo) with isolated directories. Define Zod Schemas as the single source of truth for validation. Establish environment configuration validators.
+
+Phase 1: Database Design & Layer 1/2 Security
+
+Write the 16 sequential raw SQL migrations. Enforce RLS policies. Code the connection pool wrapper to inject tenant_id contexts. Build the JWT extraction middleware.
+
+Phase 2: Core Domain APIs & Event-Sourced Engine
+
+Write Catalog endpoints. Build the authoritative inventory_events ledger blocking direct updates. Code the Till and Sales modules, processing checkouts and the refunds/voids state machine.
+
+Phase 3: The Offline-First Sync Engine
+
+Configure local IndexedDB (Dexie). Implement LRU caching for low-end devices. Code the batch ingestion API and integrate the 'Walkaway' negative-inventory conflict resolution rule.
+
+Phase 4: Frontend POS & UI Construction
+
+Build the touch-friendly POS Console, End-Of-Day Shop Close Wizard (with blind cash count), and management dashboards for inventory and credit ledgers.
+
+Phase 5: Financial Integrations & Background Analytics
+
+Write Paystack webhooks for SaaS billing. Integrate Safaricom Daraja and build the heuristic matching engine. Deploy BullMQ workers and create Materialized SQL views.
+
+Phase 6: Native Android Compilation
+
+Wrap the PWA in Capacitor. Write the native Java/Kotlin SMS interception daemon. Implement Bluetooth printer/scanner bridging.
+
+Phase 7: Quality Assurance & Deployment
+
+Execute cross-tenant assertion tests (ensure 100% rejection). Simulate network dropouts. Deploy via Render, Neon DB, and package the final APK.
+
+13. Glossary
+
+LWW (Last-Write-Wins): A deterministic conflict resolution strategy that resolves data state collisions by accepting the record with the most recent server-side arrival timestamp.
+
+MSISDN: Mobile Station International Subscriber Directory Number. The standardized configuration format for mobile numbers.
+
+PWA: Progressive Web Application. A framework leveraging service workers to render web interfaces offline like a native app.
+
+RLS: Row-Level Security. A PostgreSQL feature evaluating access privileges row-by-row based on query planner policies.
+
+Zero Attendance Operations: A state where touch UI vectors, LRU caches, and automations reduce manual administrative software overhead to near-zero.   BUZZNA D74 System Design Lock Documentation
+
+Purpose:  Master roadmap for the BuzzNa D74 Enterprise  System.
+
+1. Complete Database Dictionary
+
+All tables implement tenant_id foreign keys and PostgreSQL Row-Level Security (RLS) triggers. Below is the schema layout for the core entities:
+
+Table: businesses / tenants
+
+Column Name
+
+Data Type / Nullability
+
+Constraints / Defaults
+
+tenant_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+legal_name
+
+character varying
+
+NOT NULL
+
+trade_name
+
+character varying
+
+NULL
+
+license_status
+
+license_status_enum
+
+DEFAULT 'TRIAL_ACTIVE'
+
+license_expires_at
+
+timestamptz
+
+now() + 14 days
+
+Table: users
+
+Column Name
+
+Data Type / Nullability
+
+Constraints / Defaults
+
+user_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (FK)
+
+NOT NULL, CASCADE
+
+role_id
+
+uuid (FK)
+
+NOT NULL
+
+username
+
+character varying
+
+UNIQUE NOT NULL
+
+password_hash
+
+character varying
+
+Argon2id / Bcrypt string
+
+phone_number
+
+character varying
+
+MSISDN format
+
+Table: products
+
+Column Name
+
+Data Type / Nullability
+
+Constraints / Defaults
+
+product_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (FK)
+
+NOT NULL
+
+barcode
+
+character varying
+
+EAN/UPC identifier
+
+cost_floor
+
+numeric(12,2)
+
+Minimum allowed sale price
+
+retail_price
+
+numeric(12,2)
+
+Base retail price
+
+current_quantity
+
+numeric(15,3)
+
+Cached projection ONLY
+
+Table: inventory_events
+
+Column Name
+
+Data Type / Nullability
+
+Constraints / Defaults
+
+event_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (FK)
+
+NOT NULL
+
+product_id
+
+uuid (FK)
+
+NOT NULL
+
+event_type
+
+character varying
+
+e.g., 'STOCK_ADD', 'SALE_DISPATCH'
+
+reason_code
+
+character varying
+
+e.g., 'SPOILAGE', 'THEFT_LOSS'
+
+quantity_delta
+
+numeric(15,3)
+
+NOT NULL
+
+Table: sales_transactions
+
+Column Name
+
+Data Type / Nullability
+
+Constraints / Defaults
+
+transaction_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (FK)
+
+NOT NULL
+
+session_id
+
+uuid (FK)
+
+NOT NULL
+
+payment_method
+
+character varying
+
+'CASH', 'MPESA', 'DEBT'
+
+payment_status
+
+character varying
+
+'PENDING', 'COMPLETED_VERIFIED', 'REFUNDED'
+
+gross_total
+
+numeric(12,2)
+
+Final monetary total
+
+Table: till_sessions
+
+Column Name
+
+Data Type / Nullability
+
+Constraints / Defaults
+
+session_id
+
+uuid (PK)
+
+gen_random_uuid()
+
+tenant_id
+
+uuid (FK)
+
+NOT NULL
+
+cashier_user_id
+
+uuid (FK)
+
+NOT NULL
+
+opening_float
+
+numeric(12,2)
+
+Initial drawer float
+
+expected_cash_balance
+
+numeric(12,2)
+
+System calculated
+
+actual_cash_balance
+
+numeric(12,2)
+
+Cashier physical entry
+
+2. Entity Relationship Diagram (Textual Representation)
+
+Core relationships built on tenant-isolated strict FK constraints:
+
+Tenant (1) -> (M) Users, Products, Till Sessions, Customers, Suppliers, Invoices.
+
+Users (M) -> (1) Roles (RBAC Profile limits).
+
+Products (1) -> (M) Inventory Events (Authoritative stock ledger).
+
+Till Sessions (1) -> (M) Sales Transactions.
+
+Sales Transactions (1) -> (M) Sale Items (FK: product_id) & Payment Allocations.
+
+Customers (1) -> (M) Sales Transactions (Debt ledger map) & Repayments.
+
+Sync Batches (1) -> (M) Sync Events (Idempotency and LWW checks).
+
+3. API Contracts
+
+Method
+
+Endpoint
+
+Purpose
+
+Request
+
+Response
+
+POST
+
+/api/v1/auth/register-business
+
+Creates tenant, root owner user, and initiates trial.
+
+None
+
+JWT & Snapshot
+
+POST
+
+/api/v1/auth/login
+
+Authenticate user and return sync snapshot.
+
+Credentials
+
+JWT, Profile
+
+POST
+
+/api/v1/products
+
+Create catalog item.
+
+createProductSchema
+
+Product Record
+
+POST
+
+/api/v1/sales
+
+Finalize checkout manifest.
+
+createSaleSchema (items, paymentAllocations)
+
+Sale Record
+
+POST
+
+/api/v1/sales/:id/refund
+
+Refund sale.
+
+refundSchema
+
+Refund Record & Updated Ledger
+
+POST
+
+/api/v1/sync/batches
+
+Upload offline replication packet array.
+
+syncBatchSchema
+
+Sync Status & Rejections
+
+POST
+
+/api/v1/merchant-payments/:id/match
+
+Match Daraja M-Pesa records.
+
+matchSchema
+
+Match confirmation
+
+4. UI Wireframes & Layout Map
+
+Login: LoginForm, PasswordField, OfflineStatusChip
+
+Dashboard: KpiCards, AttentionCards (alerts), ActivityFeed timelines, BillingStatusBanner
+
+POS / Sales: ProductSearchDrawer, CartTable, PaymentAllocationPanel (margin safety overrides)
+
+Till Management: EOD Shop Close Wizard with multi-step blind balance forms
+
+Inventory: Catalog data grids, manual stock adjustment sheets, restock forms
+
+Merchant Payments: UnmatchedPaymentsTables, MatchModal
+
+Billing: LicenseCard, InvoiceTable, Read-only suspension banners
+
+5. Business Rules & Edge Cases
+
+Authoritative Ledger Sourcing: Inventory integer/decimal fields MUST NEVER be manipulated directly via update queries. Stock is calculated dynamically via sequential aggregation over immutable tracking rows.
+
+Walkaway Sync Protocol: If an offline terminal syncs a cash sale resulting in negative inventory, the server MUST NEVER reject the cash transaction. It drops stock to negative integers and flags an Attention Card.
+
+Blind Handover Discrepancy Gate: Cashiers cannot see expected till balance during closure. If physical cash entry variance exceeds limits, the session locks (REVIEW_REQUIRED).
+
+History Preservation & Refunds: Direct deletion of financial rows is banned. Error correction relies exclusively on voids, refunds, and appending REFUND_RETURN inventory events.
+
+License Enforcement: PAYMENT_DUE retains a 3-day grace period. SUSPENDED_NON_PAYMENT enforces a strict read-only lock, blocking all POS writes and syncing.
+
+Decimal Integrity: All monetary amounts must strictly use NUMERIC(15,2) or NUMERIC(12,2) to avoid floating-point rounding errors.
+
+6. Permission Matrix
+
+Action Element
+
+Owner
+
+Manager
+
+Cashier
+
+Accountant
+
+View Live Dashboard
+
+Yes
+
+Yes
+
+Yes
+
+Yes
+
+Modify Platform Billing
+
+Yes
+
+No
+
+No
+
+No
+
+Create/Edit Product Catalog
+
+Yes
+
+Yes
+
+No
+
+No
+
+Record Frontline Sale
+
+Yes
+
+Yes
+
+Yes
+
+Optional
+
+Void/Refund Completed Sale
+
+Yes
+
+Policy Enforced
+
+No
+
+No
+
+Export Financial Analytics
+
+Yes
+
+Yes
+
+No
+
+Yes
+
+7. Notification Specifications
+
+1. Attention Cards: Rendered immediately on the Owner Dashboard for Inventory Anomalies (e.g., negative stock post-sync) and Till Discrepancies (REVIEW_REQUIRED).
+
+2. SMS Interception: Android Background BroadcastReceiver daemon parses MPESA SMS receipts locally to validate offline Daraja payments.
+
+3. Automated Alerts: Redis + BullMQ (billing-reminders.worker.ts) sends automated billing grace period warnings via email and SMS.
+
+8. Report Specifications (Materialized Views)
+
+mv_daily_sales_summary: Gross sales, net profits, individual payment channel revenues per shift.
+
+mv_customer_debt_aging: Organized outstanding debt into 0-7, 8-30, and 30+ days overdue buckets.
+
+mv_product_velocity: Inventory transaction speed metrics to isolate top-performing products (drives offline LRU cache retention).
+
+mv_stale_capital_audit: Flags slow-moving stock lines with zero transactions for 45+ days.
+
+9. SQL Migration Plan
+
+0001_extensions_and_enums.sql: pgcrypto, UUIDs, enums (license_status, sale_status).
+
+0002_businesses_and_business_settings.sql: Core tenant tables.
+
+0003_roles_users_permissions_auth_tables.sql: RBAC configuration.
+
+0004_product_categories_products.sql: Catalog tables.
+
+0005_inventory_events_stock_counts.sql: Immutable event ledgers.
+
+0006_till_sessions.sql: Shift management.
+
+0007_sales_sale_items_payment_allocations_voids_refunds.sql: Checkout execution logic.
+
+0008_expenses.sql: Capital outflow tracking.
+
+0009_customers_customer_ledger_repayments.sql: Neighborhood debt ledger.
+
+0010_suppliers_supplier_transactions.sql: B2B supply lines.
+
+0011_subscription_plans_invoices_payments_license_audit.sql: Platform SaaS billing.
+
+0012_merchant_payment_connections_payments_matches_events.sql: Daraja M-Pesa integrations.
+
+0013_sync_tables.sql: Batch arrays and conflict resolution history.
+
+0014_automation_notifications_audit.sql: Alerts and immutable audit trails.
+
+0015_views_indexes_rls.sql: Materialized views, RLS policies, and composite indexes.
+
+0016_seed_core.sql: Initial system states.
+
+10. UX Journey
+
+Registration -> Trial Activation -> Terminal Login -> LRU Offline Data Caching -> Shift Till Open -> Offline-First Checkout (Cart/Payment Selection) -> Blind Till Handover -> Background Dexie Sync Engine Push -> LWW Conflict Resolution -> Dashboard Analytics Review.
+
+11. Testing Matrix
+
+• Cross-Tenant Assertion: 100% rejection requirement when testing mixed data reads across bound tokens.
+
+• Sync Drop Test: Simulate connection loss mid-batch; verify LWW idempotency on network retry without duplicating events.
+
+• Webhook Double-Hit: Fire identical Daraja/Paystack webhooks simultaneously to verify idempotency keys block double-crediting.
+
+12. Environment Variables
+
+NODE_ENV, PORT, DATABASE_URL (Neon PostgreSQL), REDIS_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, PAYSTACK_SECRET_LIVE_KEY, PAYSTACK_WEBHOOK_HMAC_SECRET, DARAJA_GLOBAL_TIMEOUT_MS, MPESA_SENDER_SMS_WHITELIST.
+
+13. Definition of Done & Development Order
+
+Every module must satisfy architecture constraints (no raw deletes, strictly append-only), pass cross-tenant RLS assertions, fulfill connection pool leakage protections (BEGIN; SET LOCAL app.current_tenant_id; COMMIT;), and pass automated test pipelines before deployment.
+
+Recommended Development Order:
+
+Database -> Security -> Authentication -> Catalog -> Inventory -> Sales -> Customers -> Suppliers -> Expenses -> Billing -> Sync Engine -> Reports -> PWA -> Android -> QA -> Deployment.
+
+
+
