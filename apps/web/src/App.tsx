@@ -1,38 +1,26 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from './providers/AuthProvider';
+import { RouterProvider } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './providers/ThemeProvider';
+import { router } from './router';
 
-// Example Layouts & Pages (To be built next)
-import MainLayout from './layouts/MainLayout';
-import DashboardPage from './pages/Dashboard';
-import PosConsole from './pages/PosConsole';
-import LoginPage from './pages/LoginPage';
+// Single shared React Query client for the whole PWA.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      refetchOnWindowFocus: false,
+      staleTime: 1000 * 30,
+    },
+  },
+});
 
-// Route Guard to enforce authentication rules
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated } = useAuth();
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
-};
-
-export const App = () => {
+export const App: React.FC = () => {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            {/* Public Route */}
-            <Route path="/login" element={<LoginPage />} />
-            
-            {/* Protected Application Routes */}
-            <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-              <Route index element={<DashboardPage />} />
-              <Route path="pos" element={<PosConsole />} />
-              {/* Other routes like /inventory, /customers, /billing go here */}
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
     </ThemeProvider>
   );
 };

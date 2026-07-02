@@ -54,6 +54,14 @@ export class WalkawaySyncManager {
   }
 
   /**
+   * Convenience bootstrap invoked by the UI after a successful login.
+   * Alias that kicks off the background synchronization heartbeat.
+   */
+  public initialize(intervalMs: number = 15000): void {
+    this.startLifecycleHeartbeat(intervalMs);
+  }
+
+  /**
    * Starts the automatic background synchronization heartbeats.
    */
   public startLifecycleHeartbeat(intervalMs: number = 15000): void {

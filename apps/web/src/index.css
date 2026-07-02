@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Sensible defaults; ThemeProvider overrides these at runtime. */
+  --color-primary: #c85a32;
+  --color-secondary: #f8b735;
+  --color-background: #fdfbf7;
+  --color-surface: #f5efe6;
+  --color-text: #2d1e18;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
